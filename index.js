@@ -630,7 +630,7 @@
         });
 
         const list = document.createElement("div");
-        list.textContent = "リスト  ›";
+        list.textContent = "List  ›";
         Object.assign(list.style, {
             padding: "6px 18px",
             cursor: "pointer",
@@ -656,7 +656,7 @@
         list.appendChild(listPanel);
 
         const nameGroup = document.createElement("div");
-        nameGroup.textContent = "リスト名  ›";
+        nameGroup.textContent = "ListName  ›";
         Object.assign(nameGroup.style, {
             padding: "6px 18px",
             cursor: "pointer",
@@ -687,21 +687,21 @@
         nameGroup.addEventListener("mouseenter", () => { nameGroup.style.background = "rgb(48,60,62)"; namePanel.style.display = "block"; });
         nameGroup.addEventListener("mouseleave", () => { nameGroup.style.background = "rgb(22,29,30)"; namePanel.style.display = "none"; });
 
-        listPanel.appendChild(menuItem("配列", async () => {
+        listPanel.appendChild(menuItem("array", async () => {
             const data = getNamesOrAlert();
             if (!data) return;
             await createParallel(data.block, data.names);
             removeFloatingMenu();
         }));
 
-        namePanel.appendChild(menuItem("配列", async () => {
+        namePanel.appendChild(menuItem("array", async () => {
             const data = getNamesOrAlert();
             if (!data) return;
             await createTextArray(data.block, data.names);
             removeFloatingMenu();
         }));
 
-        namePanel.appendChild(menuItem("ファイル", () => {
+        namePanel.appendChild(menuItem("File", () => {
             const data = getNamesOrAlert();
             if (!data) return;
             exportTextFile(data.block, data.names);
