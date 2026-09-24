@@ -1,11 +1,12 @@
-/* global BF2042Portal */
+/* global BF2042Portal, _Blockly */
 (function () {
     "use strict";
 
-    // Block_Catalog: BF2042 Portal のブロック定義をテキスト出力する独立プラグイン
-    const plugin = BF2042Portal.Plugins.getPlugin("Block_Catalog");
+    // Selection_List: BF2042 Portal の「選択リスト」ブロックから項目名をテキスト出力する独立プラグイン
+    const plugin = BF2042Portal.Plugins.getPlugin("Selection_List");
     let observer = null;
-    let registeredSubmenu = null;
+    let lastContextBlockId = null;
+    let lastContextBlock = null;
 
     function getPortalLanguage() {
         const candidates = [
@@ -16,132 +17,166 @@
         return lang.toLowerCase().startsWith("ja") ? "ja" : "en";
     }
 
-    function catalogValue(obj, keys) {
-        if (!obj || typeof obj !== "object") return "";
-        for (const key of keys) {
-            const value = obj[key];
-            if (typeof value === "string" && value.trim()) return value.trim();
+    function getBlockFromId(id) {
+        if (!id) return null;
+        try {
+            const ws = _Blockly?.getMainWorkspace?.();
+            if (ws?.getBlockById) return ws.getBlockById(String(id));
+        } catch (_) {}
+        return null;
+    }
+
+    function isSelectionListBlock(block) {
+        if (!block) return false;
+        const type = String(block.type || "").toLowerCase();
+        if (/selection[_-]?list|list[_-]?selection/.test(type)) return true;
+
+        let text = "";
+        try { text += " " + String(block.toString?.() || ""); } catch (_) {}
+        try {
+            for (const input of block.inputList || []) {
+                for (const field of input?.fieldRow || []) {
+                    try {
+                        text += " " + String(field.getText?.() ?? field.getValue?.() ?? "");
+                    } catch (_) {}
+                }
+            }
+        } catch (_) {}
+        return /選択リスト|selection\s*list/i.test(text);
+    }
+
+    function cleanName(value) {
+        if (value === null || value === undefined) return "";
+        if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+            const s = String(value).trim();
+            return s;
         }
         return "";
     }
 
-    function formatBlockCatalog(definitions) {
-        const seen = new WeakSet();
-        const lines = [
-            "PORTAL Block Catalog",
-            "Generated: " + new Date().toLocaleString(),
-            "",
-            "親子関係はインデントで表します。",
-            "名前 / type / id は定義データから取得できたものを表示します。",
-            ""
-        ];
-        const nameKeys = ["name", "displayName", "label", "title", "text", "blockName", "categoryName", "menuName"];
-        const typeKeys = ["type", "blockType", "kind"];
-        const idKeys = ["id", "blockId", "definitionId"];
+    function addUnique(list, seen, value) {
+        const s = cleanName(value);
+        if (!s || seen.has(s)) return;
+        seen.add(s);
+        list.push(s);
+    }
 
-        const isBlockish = (obj) => {
-            if (!obj || typeof obj !== "object" || Array.isArray(obj)) return false;
-            const hasType = !!catalogValue(obj, typeKeys);
-            const hasBlock = ["block", "inputs", "fields", "output", "previousStatement", "nextStatement", "message0", "args0"]
-                .some(k => Object.prototype.hasOwnProperty.call(obj, k));
-            return hasType || hasBlock;
-        };
+    function valueFromObject(obj) {
+        if (obj === null || obj === undefined) return "";
+        if (typeof obj !== "object") return cleanName(obj);
+        const keys = ["name", "displayName", "label", "text", "title", "value", "option", "choice", "itemName"];
+        for (const key of keys) {
+            const value = cleanName(obj[key]);
+            if (value) return value;
+        }
+        return "";
+    }
 
-        function nodeTitle(value, key) {
-            if (value && typeof value === "object" && !Array.isArray(value)) {
-                const n = catalogValue(value, nameKeys);
-                const t = catalogValue(value, typeKeys);
-                const id = catalogValue(value, idKeys);
-                if (n || t || id) {
-                    const parts = [];
-                    if (n) parts.push(n);
-                    if (t && t !== n) parts.push("type=" + t);
-                    if (id && id !== t && id !== n) parts.push("id=" + id);
-                    return parts.join(" | ");
+    function extractArrayProperty(block, names, result, seen) {
+        for (const name of names) {
+            let value;
+            try { value = block[name]; } catch (_) { value = undefined; }
+            if (!Array.isArray(value)) continue;
+            for (const item of value) {
+                addUnique(result, seen, valueFromObject(item));
+            }
+            if (result.length) return true;
+        }
+        return false;
+    }
+
+    function extractSelectionItemNames(block) {
+        const result = [];
+        const seen = new Set();
+
+        // Selection List implementations commonly keep their entries in one of these arrays.
+        extractArrayProperty(block,
+            ["itemNames", "items", "listItems", "selectionItems", "options", "choices", "values"],
+            result, seen);
+
+        // Some versions expose item names through named fields/inputs.
+        try {
+            for (const input of block.inputList || []) {
+                for (const field of input?.fieldRow || []) {
+                    if (!field) continue;
+                    const fieldName = String(field.name || "").toUpperCase();
+                    if (!/(ITEM|OPTION|CHOICE|SELECTION|LIST|VALUE|NAME|TEXT)/.test(fieldName)) continue;
+                    let value = "";
+                    try { value = field.getText?.() ?? ""; } catch (_) {}
+                    if (!value) {
+                        try { value = field.getValue?.() ?? ""; } catch (_) {}
+                    }
+                    addUnique(result, seen, value);
                 }
             }
-            return String(key);
-        }
-
-        function walk(value, label, depth) {
-            const pad = "  ".repeat(depth);
-            if (value === null || value === undefined || typeof value !== "object") {
-                lines.push(pad + "└─ " + label + ": " + String(value));
-                return;
-            }
-            if (seen.has(value)) {
-                lines.push(pad + "└─ " + label + " [循環参照]");
-                return;
-            }
-            seen.add(value);
-
-            if (Array.isArray(value)) {
-                lines.push(pad + "├─ " + label + " [" + value.length + " items]");
-                value.forEach((child, i) => walk(child, "[" + i + "]", depth + 1));
-                return;
-            }
-
-            const title = nodeTitle(value, label);
-            const marker = isBlockish(value) ? "◆ " : "";
-            lines.push(pad + "├─ " + marker + title);
-            const keys = Object.keys(value);
-            for (const key of keys) {
-                if (["name", "displayName", "label", "title", "type", "blockType", "kind", "id", "blockId", "definitionId"].includes(key)) continue;
-                const child = value[key];
-                if (child && typeof child === "object") walk(child, key, depth + 1);
-            }
-        }
-
-        if (Array.isArray(definitions)) {
-            lines.push("=== Definitions ===");
-            definitions.forEach((v, i) => walk(v, "[" + i + "]", 0));
-        } else if (definitions && typeof definitions === "object") {
-            for (const key of Object.keys(definitions)) walk(definitions[key], key, 0);
-        } else {
-            lines.push(String(definitions));
-        }
-        return lines.join("\n") + "\n";
-    }
-
-    function getDefinitions() {
-        try {
-            const definitions = BF2042Portal?.Startup?.getBlockDefinitions?.();
-            if (definitions !== undefined && definitions !== null) return definitions;
         } catch (_) {}
-        return undefined;
+
+        // Fallback: inspect descendant blocks whose type/name suggests a list item.
+        try {
+            const descendants = typeof block.getDescendants === "function"
+                ? block.getDescendants(false) || []
+                : [];
+            for (const child of descendants) {
+                const type = String(child?.type || "").toLowerCase();
+                if (!/(selection|list|option|choice|item)/.test(type)) continue;
+                for (const input of child.inputList || []) {
+                    for (const field of input?.fieldRow || []) {
+                        let value = "";
+                        try { value = field?.getText?.() ?? ""; } catch (_) {}
+                        if (!value) {
+                            try { value = field?.getValue?.() ?? ""; } catch (_) {}
+                        }
+                        addUnique(result, seen, value);
+                    }
+                }
+            }
+        } catch (_) {}
+
+        return result;
     }
 
-    function downloadCatalog() {
-        const definitions = getDefinitions();
+    function downloadSelectionList() {
+        const block = lastContextBlock || getBlockFromId(lastContextBlockId);
         const ja = getPortalLanguage() === "ja";
-        if (definitions === undefined || definitions === null) {
-            const message = ja
-                ? "ブロック定義がまだ取得できません。ページを再読み込みしてから再度実行してください。"
-                : "Block definitions are not available yet. Reload the page and try again.";
-            alert(message);
+
+        if (!block || !isSelectionListBlock(block)) {
+            alert(ja
+                ? "選択リストブロック上で「オプション」→「Selection List」を実行してください。"
+                : "Run Options → Selection List on a Selection List block.");
             return;
         }
 
-        const text = formatBlockCatalog(definitions);
-        const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+        const names = extractSelectionItemNames(block);
+        if (!names.length) {
+            alert(ja
+                ? "選択リストの項目名を取得できませんでした。"
+                : "No selection list item names could be found.");
+            return;
+        }
+
+        const text = names.join("\n") + "\n";
+        const blob = new Blob(["\uFEFF" + text], { type: "text/plain;charset=utf-8" });
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
-        a.download = "PORTAL_Block_Catalog.txt";
+        a.download = "Selection_List.txt";
         document.body.appendChild(a);
         a.click();
         a.remove();
         setTimeout(() => URL.revokeObjectURL(url), 1000);
     }
 
-    function addCatalogItem(submenu) {
+    function addSelectionListItem(submenu) {
         if (!submenu || !submenu.isConnected) return;
-        if (submenu.querySelector('[data-bf6-block-catalog-plugin="1"]')) return;
+        if (submenu.querySelector('[data-selection-list-plugin="1"]')) return;
+
+        const block = lastContextBlock || getBlockFromId(lastContextBlockId);
+        if (!isSelectionListBlock(block)) return;
 
         const isJa = getPortalLanguage() === "ja";
         const item = document.createElement("div");
         item.className = "bf6-options-menu-item";
-        item.setAttribute("data-bf6-block-catalog-plugin", "1");
+        item.setAttribute("data-selection-list-plugin", "1");
         Object.assign(item.style, {
             padding: "5px 18px",
             whiteSpace: "nowrap",
@@ -156,7 +191,7 @@
 
         const label = document.createElement("span");
         label.className = "bf6-options-menu-label";
-        label.textContent = isJa ? "ブロック一覧をテキスト出力" : "Export Block List";
+        label.textContent = "Selection List";
         item.appendChild(label);
 
         item.addEventListener("mouseenter", () => item.style.background = "rgb(48, 60, 62)");
@@ -165,16 +200,15 @@
             event.preventDefault();
             event.stopPropagation();
             event.stopImmediatePropagation?.();
-            downloadCatalog();
+            downloadSelectionList();
         }, true);
 
         submenu.appendChild(item);
-        registeredSubmenu = submenu;
     }
 
     function scan() {
         const submenus = document.querySelectorAll(".bf6-experience-manager-options-submenu");
-        for (const submenu of submenus) addCatalogItem(submenu);
+        for (const submenu of submenus) addSelectionListItem(submenu);
     }
 
     function startObserver() {
@@ -183,6 +217,20 @@
         observer.observe(document.documentElement || document.body, { childList: true, subtree: true });
         scan();
     }
+
+    document.addEventListener("contextmenu", event => {
+        try {
+            const target = event.target;
+            const blockEl = target?.closest?.("g.blocklyDraggable");
+            const id = blockEl?.getAttribute?.("data-id") || blockEl?.dataset?.id || null;
+            lastContextBlockId = id ? String(id) : null;
+            lastContextBlock = getBlockFromId(lastContextBlockId);
+            setTimeout(scan, 0);
+        } catch (_) {
+            lastContextBlockId = null;
+            lastContextBlock = null;
+        }
+    }, true);
 
     plugin.initializeWorkspace = async function () {
         startObserver();
