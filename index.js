@@ -34,6 +34,53 @@
         out.push(s);
     }
 
+    function getFieldOptionPairs(field) {
+        if (!field) return [];
+        const candidates = [];
+        try {
+            if (typeof field.getOptions === "function") {
+                const value = field.getOptions(false);
+                if (Array.isArray(value)) candidates.push(value);
+            }
+        } catch (_) {}
+
+        for (const key of ["options_", "options", "menuGenerator_", "menuGenerator", "choices", "values"]) {
+            try {
+                const value = field[key];
+                if (Array.isArray(value)) candidates.push(value);
+                else if (typeof value === "function") {
+                    const generated = value.call(field);
+                    if (Array.isArray(generated)) candidates.push(generated);
+                }
+            } catch (_) {}
+        }
+
+        const out = [];
+        const seen = new Set();
+        for (const list of candidates) {
+            for (const option of list) {
+                let display = "";
+                let value = "";
+                if (Array.isArray(option)) {
+                    display = normalize(option[0]);
+                    value = normalize(option[1]);
+                } else if (option && typeof option === "object") {
+                    display = normalize(option.text || option.label || option.displayName || option.name || option.value);
+                    value = normalize(option.value || option.name || option.text || option.label || option.displayName);
+                } else {
+                    display = normalize(option);
+                    value = display;
+                }
+                if (!display && !value) continue;
+                const key = `${display}\\u0000${value}`;
+                if (seen.has(key)) continue;
+                seen.add(key);
+                out.push({ display: display || value, value: value || display });
+            }
+        }
+        return out;
+    }
+
     function getFieldOptions(field) {
         if (!field) return [];
         const candidates = [];
@@ -536,6 +583,202 @@
                 : `Copied ${names.length} names as text arrays in ${count} collapsed subroutines.`);
     }
 
+    async function translateTextBatch(text) {
+        const endpoint = "https://translate.googleapis.com/translate_a/single";
+        const url = endpoint + "?client=gtx&sl=auto&tl=ja&dt=t&q=" + encodeURIComponent(text);
+        const response = await fetch(url, { method: "GET", credentials: "omit" });
+        if (!response.ok) throw new Error(`Translation HTTP ${response.status}`);
+        const data = await response.json();
+        if (!Array.isArray(data) || !Array.isArray(data[0])) throw new Error("Unexpected translation response");
+        return data[0].map(part => Array.isArray(part) ? String(part[0] || "") : "").join("");
+    }
+
+    async function translateNames(names) {
+        const unique = [...new Set(names.map(normalize).filter(Boolean))];
+        const translated = new Map();
+        const cacheKey = "selectionListTranslationCache_v1";
+        let cache = {};
+        try { cache = JSON.parse(localStorage.getItem(cacheKey) || "{}"); } catch (_) { cache = {}; }
+
+        const pending = [];
+        for (const name of unique) {
+            if (cache && typeof cache[name] === "string" && cache[name]) translated.set(name, cache[name]);
+            else pending.push(name);
+        }
+
+        const BATCH_CHARS = 1200;
+        const batches = [];
+        let batch = [];
+        let length = 0;
+        for (const name of pending) {
+            const extra = name.length + 1;
+            if (batch.length && length + extra > BATCH_CHARS) {
+                batches.push(batch);
+                batch = [];
+                length = 0;
+            }
+            batch.push(name);
+            length += extra;
+        }
+        if (batch.length) batches.push(batch);
+
+        const translateOneBatch = async sourceBatch => {
+            const source = sourceBatch.join("\n");
+            try {
+                const result = await translateTextBatch(source);
+                const parts = result.split(/\r?\n/);
+                if (parts.length === sourceBatch.length) {
+                    sourceBatch.forEach((name, i) => {
+                        const value = String(parts[i] || name).trim();
+                        translated.set(name, value || name);
+                        cache[name] = value || name;
+                    });
+                    return;
+                }
+            } catch (_) {}
+
+            // If a batch response cannot be mapped 1:1, retry the batch entries
+            // individually. This is only a fallback; normal operation stays batched.
+            for (const name of sourceBatch) {
+                try {
+                    const value = String(await translateTextBatch(name)).trim() || name;
+                    translated.set(name, value);
+                    cache[name] = value;
+                } catch (_) {
+                    translated.set(name, name);
+                    cache[name] = name;
+                }
+            }
+        };
+
+        // A small amount of concurrency keeps large lists practical without
+        // hammering the public translation endpoint with hundreds of requests.
+        for (let i = 0; i < batches.length; i += 3) {
+            await Promise.all(batches.slice(i, i + 3).map(translateOneBatch));
+        }
+
+        try { localStorage.setItem(cacheKey, JSON.stringify(cache)); } catch (_) {}
+        return names.map(name => translated.get(normalize(name)) || normalize(name));
+    }
+
+
+    function extractSelectionItemPairs(block) {
+        const result = [];
+        const seen = new Set();
+        if (!block) return result;
+        const fields = getAllFields(block);
+        const fieldResults = [];
+        for (const field of fields) {
+            const options = getFieldOptionPairs(field);
+            if (!isLikelySelectionField(field, options.map(o => o.display)) || !options.length) continue;
+            fieldResults.push({ field, options });
+        }
+        fieldResults.sort((a, b) => {
+            const an = normalize(a.field?.name).toLowerCase();
+            const bn = normalize(b.field?.name).toLowerCase();
+            const ac = normalize(a.field?.constructor?.name).toLowerCase();
+            const bc = normalize(b.field?.constructor?.name).toLowerCase();
+            const ap = an === "value-1" || ac.includes("dropdown") ? 0 : 1;
+            const bp = bn === "value-1" || bc.includes("dropdown") ? 0 : 1;
+            return ap - bp;
+        });
+        for (const entry of fieldResults) {
+            for (const option of entry.options) {
+                const original = normalize(option.value || option.display);
+                const display = normalize(option.display || option.value);
+                if (!original && !display) continue;
+                const key = `${original}\\u0000${display}`;
+                if (seen.has(key)) continue;
+                seen.add(key);
+                result.push({ original, display });
+            }
+        }
+        return result;
+    }
+
+    async function createJapaneseTextArray(block, names) {
+        const translated = await translateNames(names);
+        const MAX_ITEMS_PER_ARRAY = 256;
+        const pos = getBlockPosition(block);
+        const x = Number(pos.x.toFixed(6));
+        const base = getBaseVariableName(block);
+        const chunks = [];
+
+        for (let offset = 0, chunkIndex = 0; offset < translated.length; offset += MAX_ITEMS_PER_ARRAY, chunkIndex++) {
+            const chunk = translated.slice(offset, offset + MAX_ITEMS_PER_ARRAY);
+            const variableName = translated.length > MAX_ITEMS_PER_ARRAY
+                ? `${base}_TEXT_J_${chunkIndex + 1}`
+                : `${base}_TEXT_J`;
+            const variable = findNamedGlobalVariable(variableName);
+            const setBlocks = [];
+            chunk.forEach((name, localIndex) => {
+                const setBlock = {
+                    type: "SetVariableAtIndex",
+                    id: makeId("SetJa", offset + localIndex),
+                    inputs: {
+                        "VALUE-0": { block: {
+                            type: "variableReferenceBlock",
+                            id: makeId("JaVar", offset + localIndex),
+                            extraState: { isObjectVar: false },
+                            fields: {
+                                OBJECTTYPE: "Global",
+                                VAR: { id: variable.id || makeId("JaVarId", chunkIndex), name: variable.name, type: "Global" }
+                            }
+                        }},
+                        "VALUE-1": { block: {
+                            type: "Number",
+                            id: makeId("JaNum", offset + localIndex),
+                            fields: { NUM: localIndex }
+                        }},
+                        "VALUE-2": { block: {
+                            type: "Text",
+                            id: makeId("JaText", offset + localIndex),
+                            fields: { TEXT: name }
+                        }}
+                    },
+                    _bf6Position: { x, y: Number((pos.y + localIndex * 53).toFixed(6)) }
+                };
+                if (setBlocks.length) setBlocks[setBlocks.length - 1].next = { block: setBlock };
+                setBlocks.push(setBlock);
+            });
+            const subroutineNumber = chunkIndex + 1;
+            const subroutineName = `SUB_${base}_TEXT_J${String(subroutineNumber).padStart(2, "0")}`;
+            const subroutineId = makeId("SubJa", subroutineNumber);
+            chunks.push({
+                subroutine: {
+                    type: "subroutineBlock",
+                    id: subroutineId,
+                    collapsed: true,
+                    extraState: { subroutineName, parameters: [] },
+                    fields: { SUBROUTINE_NAME: subroutineName },
+                    inputs: { ACTIONS: setBlocks[0] ? { block: setBlocks[0] } : {} },
+                    _bf6Position: { x, y: Number((pos.y + chunkIndex * 53 * 256).toFixed(6)) }
+                },
+                sourceId: subroutineId,
+                variableName: variable.name,
+                count: chunk.length,
+                subroutineName
+            });
+        }
+
+        return {
+            _bf6MultiBlockClipboard: 1,
+            blocks: chunks.map(c => c.subroutine),
+            sourceIds: chunks.map(c => c.sourceId),
+            connections: [],
+            _selectionListChunks: chunks.map((c, i) => ({ index: i + 1, variable: c.variableName, count: c.count, subroutine: c.subroutineName }))
+        };
+    }
+
+    async function createJapaneseArray(block, names) {
+        const payload = await createJapaneseTextArray(block, names);
+        const count = Math.ceil(names.length / 256);
+        await copyPayloadAndAlert(block, payload,
+            getPortalLanguage() === "ja"
+                ? `${names.length}個を日本語名へ翻訳し、${count}個の折りたたみサブルーチンとしてクリップボードへコピーしました。`
+                : `Translated ${names.length} names to Japanese and copied them into ${count} collapsed subroutines.`);
+    }
+
     function exportTextFile(block, names) {
         const group = getFieldText(block, "VALUE-0") || getBaseVariableName(block);
         const filename = `${group}_list.txt`;
@@ -556,6 +799,30 @@
                 : `Exported ${names.length} names to "${filename}".`);
         } catch (_) {
             alert(getPortalLanguage() === "ja" ? "テキストファイルの出力に失敗しました。" : "Failed to export the text file.");
+        }
+    }
+
+    async function exportTranslatedTextFile(block, names) {
+        const translated = await translateNames(names);
+        const group = getFieldText(block, "VALUE-0") || getBaseVariableName(block);
+        const filename = `${group}_list_EJ.txt`;
+        const text = names.map((name, i) => `${name}\",\"${translated[i] || name}`).join("\r\n") + "\r\n";
+        try {
+            const blob = new Blob(["\uFEFF", text], { type: "text/plain;charset=utf-8" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = filename;
+            a.style.display = "none";
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+            alert(getPortalLanguage() === "ja"
+                ? `${names.length}個を「英語","日本語」形式で「${filename}」へ出力しました。`
+                : `Exported ${names.length} names as English/Japanese pairs to "${filename}".`);
+        } catch (_) {
+            alert(getPortalLanguage() === "ja" ? "翻訳付きテキストファイルの出力に失敗しました。" : "Failed to export the translated text file.");
         }
     }
 
@@ -682,10 +949,22 @@
                 await createTextArray(data.block, data.names);
                 removeFloatingMenu();
             }),
+            menuItem("ListName → array (J)", async () => {
+                const data = getNamesOrAlert();
+                if (!data) return;
+                await createJapaneseArray(data.block, data.names);
+                removeFloatingMenu();
+            }),
             menuItem("ListName → File", () => {
                 const data = getNamesOrAlert();
                 if (!data) return;
                 exportTextFile(data.block, data.names);
+                removeFloatingMenu();
+            }),
+            menuItem("ListName → File (E,J)", async () => {
+                const data = getNamesOrAlert();
+                if (!data) return;
+                await exportTranslatedTextFile(data.block, data.names);
                 removeFloatingMenu();
             })
         ];
