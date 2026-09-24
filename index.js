@@ -613,120 +613,17 @@
 
     function createFloatingMenu(anchor) {
         removeFloatingMenu();
-
         const panel = document.createElement("div");
         panel.setAttribute("data-selection-list-plugin", "floating-root");
-        Object.assign(panel.style, {
-            position: "fixed",
-            left: "0px",
-            top: "0px",
-            minWidth: "190px",
-            background: "rgb(22, 29, 30)",
-            color: "#ffffff",
-            border: "1px solid #3a4648",
-            boxShadow: "0 3px 14px rgba(0,0,0,.45)",
-            zIndex: "2147483647",
-            padding: "2px 0"
-        });
-
-        const list = document.createElement("div");
-        list.textContent = "List  ›";
-        Object.assign(list.style, {
-            padding: "6px 18px",
-            cursor: "pointer",
-            whiteSpace: "nowrap",
-            position: "relative"
-        });
-        panel.appendChild(list);
-
-        const listPanel = document.createElement("div");
-        Object.assign(listPanel.style, {
-            display: "none",
-            position: "absolute",
-            left: "100%",
-            top: "0px",
-            minWidth: "180px",
-            background: "rgb(22, 29, 30)",
-            color: "#ffffff",
-            border: "1px solid #3a4648",
-            boxShadow: "0 3px 14px rgba(0,0,0,.45)",
-            padding: "2px 0",
-            zIndex: "2147483647"
-        });
-        list.appendChild(listPanel);
-
-        const nameGroup = document.createElement("div");
-        nameGroup.textContent = "ListName  ›";
-        Object.assign(nameGroup.style, {
-            padding: "6px 18px",
-            cursor: "pointer",
-            whiteSpace: "nowrap",
-            position: "relative",
-            borderTop: "1px solid #3a4648"
-        });
-        panel.appendChild(nameGroup);
-
-        const namePanel = document.createElement("div");
-        Object.assign(namePanel.style, {
-            display: "none",
-            position: "absolute",
-            left: "100%",
-            top: "0px",
-            minWidth: "180px",
-            background: "rgb(22, 29, 30)",
-            color: "#ffffff",
-            border: "1px solid #3a4648",
-            boxShadow: "0 3px 14px rgba(0,0,0,.45)",
-            padding: "2px 0",
-            zIndex: "2147483647"
-        });
-        nameGroup.appendChild(namePanel);
-
-        list.addEventListener("mouseenter", () => { list.style.background = "rgb(48,60,62)"; listPanel.style.display = "block"; });
-        list.addEventListener("mouseleave", () => { list.style.background = "rgb(22,29,30)"; listPanel.style.display = "none"; });
-        nameGroup.addEventListener("mouseenter", () => { nameGroup.style.background = "rgb(48,60,62)"; namePanel.style.display = "block"; });
-        nameGroup.addEventListener("mouseleave", () => { nameGroup.style.background = "rgb(22,29,30)"; namePanel.style.display = "none"; });
-
-        listPanel.appendChild(menuItem("array", async () => {
-            const data = getNamesOrAlert();
-            if (!data) return;
-            await createParallel(data.block, data.names);
-            removeFloatingMenu();
-        }));
-
-        namePanel.appendChild(menuItem("array", async () => {
-            const data = getNamesOrAlert();
-            if (!data) return;
-            await createTextArray(data.block, data.names);
-            removeFloatingMenu();
-        }));
-
-        namePanel.appendChild(menuItem("File", () => {
-            const data = getNamesOrAlert();
-            if (!data) return;
-            exportTextFile(data.block, data.names);
-            removeFloatingMenu();
-        }));
-
+        Object.assign(panel.style, { position:"fixed", left:"0px", top:"0px", minWidth:"190px", background:"rgb(22, 29, 30)", color:"#fff", border:"1px solid #3a4648", boxShadow:"0 3px 14px rgba(0,0,0,.45)", zIndex:"2147483647", padding:"2px 0" });
+        panel.appendChild(menuItem("List → array", async () => { const data=getNamesOrAlert(); if(!data)return; await createParallel(data.block,data.names); removeFloatingMenu(); }));
+        panel.appendChild(menuItem("ListName → array", async () => { const data=getNamesOrAlert(); if(!data)return; await createTextArray(data.block,data.names); removeFloatingMenu(); }));
+        panel.appendChild(menuItem("ListName → File", () => { const data=getNamesOrAlert(); if(!data)return; exportTextFile(data.block,data.names); removeFloatingMenu(); }));
         document.body.appendChild(panel);
-
-        const rect = anchor.getBoundingClientRect();
-        let left = rect.right + 4;
-        let top = rect.top;
-        const width = 220;
-        if (left + width > window.innerWidth - 4) left = Math.max(4, rect.left - width - 4);
-        panel.style.left = `${left}px`;
-        panel.style.top = `${Math.max(4, Math.min(top, window.innerHeight - 120))}px`;
-
-        setTimeout(() => {
-            const close = event => {
-                if (!panel.contains(event.target) && event.target !== anchor) {
-                    removeFloatingMenu();
-                    document.removeEventListener("mousedown", close, true);
-                }
-            };
-            document.addEventListener("mousedown", close, true);
-        }, 0);
+        const rect=anchor.getBoundingClientRect(); let left=rect.right+4; let top=rect.top; const width=220;
+        if(left+width>window.innerWidth-4) left=Math.max(4,rect.left-width-4);
+        panel.style.left=`${left}px`; panel.style.top=`${Math.max(4,Math.min(top,window.innerHeight-120))}px`;
+        setTimeout(()=>{ const close=event=>{ if(!panel.contains(event.target)&&event.target!==anchor){ removeFloatingMenu(); document.removeEventListener("mousedown",close,true); } }; document.addEventListener("mousedown",close,true); },0);
     }
 
     function addSelectionListMenu(submenu) {
