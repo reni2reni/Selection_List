@@ -806,7 +806,7 @@
         const translated = await translateNames(names);
         const group = getFieldText(block, "VALUE-0") || getBaseVariableName(block);
         const filename = `${group}_list_EJ.txt`;
-        const text = names.map((name, i) => `${name}\",\"${translated[i] || name}`).join("\r\n") + "\r\n";
+        const text = names.map((name, i) => `${name},${translated[i] || name}`).join("\r\n") + "\r\n";
         try {
             const blob = new Blob(["\uFEFF", text], { type: "text/plain;charset=utf-8" });
             const url = URL.createObjectURL(blob);
