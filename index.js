@@ -774,7 +774,8 @@
         const progressBar = names.length > 256 ? createLoadingStatus(names.length) : null;
         if (progressBar) updateLoadingStatus(progressBar, 0, names.length);
         const translated = await translateNames(names, progressBar);
-        if (progressBar) { updateLoadingStatus(progressBar, names.length, names.length); await yieldToUI(); removeLoadingStatus(progressBar); }
+        // 完了時は表示更新を待たず、アラートを出す直前に即時で消す。
+        if (progressBar) removeLoadingStatus(progressBar);
         const MAX_ITEMS_PER_ARRAY = 256;
         const pos = getBlockPosition(block);
         const x = Number(pos.x.toFixed(6));
@@ -883,7 +884,8 @@
         const progressBar = names.length > 256 ? createLoadingStatus(names.length) : null;
         if (progressBar) updateLoadingStatus(progressBar, 0, names.length);
         const translated = await translateNames(names, progressBar);
-        if (progressBar) { updateLoadingStatus(progressBar, names.length, names.length); await yieldToUI(); removeLoadingStatus(progressBar); }
+        // 完了時は表示更新を待たず、アラートを出す直前に即時で消す。
+        if (progressBar) removeLoadingStatus(progressBar);
         const group = getFieldText(block, "VALUE-0") || getBaseVariableName(block);
         const filename = `${group}_list_EJ.txt`;
         const text = names.map((name, i) => `${name},${translated[i] || name}`).join("\r\n") + "\r\n";
