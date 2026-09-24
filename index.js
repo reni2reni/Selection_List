@@ -714,6 +714,10 @@
             event.preventDefault();
             event.stopPropagation();
             event.stopImmediatePropagation?.();
+            // Use the cursor position at the moment Selection List is activated,
+            // not the position from the original block right-click.
+            if (Number.isFinite(event.clientX)) lastContextMenuX = event.clientX;
+            if (Number.isFinite(event.clientY)) lastContextMenuY = event.clientY;
             createFloatingMenu(root);
         }, true);
 
