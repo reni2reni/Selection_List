@@ -649,8 +649,9 @@
         panel.appendChild(menuItem("ListName → array", async () => { const data=getNamesOrAlert(); if(!data)return; await createTextArray(data.block,data.names); removeFloatingMenu(); }));
         panel.appendChild(menuItem("ListName → File", () => { const data=getNamesOrAlert(); if(!data)return; exportTextFile(data.block,data.names); removeFloatingMenu(); }));
         document.body.appendChild(panel);
-        // Show the floating submenu with its TOP-LEFT corner at the original
-        // right-click mouse position. Do not derive the position from the
+        // Show the floating submenu 26px to the right of the Selection List click
+        // position. This leaves enough room for the cursor without closing the menu.
+        // Do not derive the position from the parent menu DOM; PORTAL can reposition it.
         // parent menu DOM; PORTAL can reposition that menu dynamically.
         const width = 220;
         const left = Math.max(0, Math.min(lastContextMenuX, window.innerWidth - width));
@@ -716,7 +717,7 @@
             event.stopImmediatePropagation?.();
             // Use the cursor position at the moment Selection List is activated,
             // not the position from the original block right-click.
-            if (Number.isFinite(event.clientX)) lastContextMenuX = event.clientX;
+            if (Number.isFinite(event.clientX)) lastContextMenuX = event.clientX + 26;
             if (Number.isFinite(event.clientY)) lastContextMenuY = event.clientY;
             createFloatingMenu(root);
         }, true);
