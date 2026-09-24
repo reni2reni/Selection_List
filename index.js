@@ -561,7 +561,7 @@
 
     function menuItem(label, onClick, indent = false) {
         const item = document.createElement("div");
-        item.className = "bf6-options-menu-item";
+        item.className = "selection-list-plugin-menu-item";
         item.setAttribute("data-selection-list-plugin", "item");
         Object.assign(item.style, {
             padding: "5px 18px",
@@ -607,8 +607,35 @@
         return { block, names };
     }
 
+    let floatingMenuObserver = null;
+
+    function isSelectionListBlock(block) {
+        if (!block) return false;
+        // Selection-list blocks exposed by PORTAL are the *Item block types.
+        // Keep the field check as a fallback for variants whose type name differs.
+        const type = normalize(block.type);
+        if (/Item$/i.test(type)) {
+            const names = extractSelectionItems(block);
+            if (names.length >= 2) return true;
+        }
+        try {
+            const fields = getAllFields(block);
+            for (const field of fields) {
+                const options = getFieldOptions(field);
+                const name = normalize(field?.name).toLowerCase();
+                const ctor = normalize(field?.constructor?.name).toLowerCase();
+                if (options.length >= 2 && (name === "value-1" || ctor.includes("dropdown"))) return true;
+            }
+        } catch (_) {}
+        return false;
+    }
+
     function removeFloatingMenu() {
         document.querySelectorAll('[data-selection-list-plugin="floating-root"]').forEach(el => el.remove());
+        if (floatingMenuObserver) {
+            try { floatingMenuObserver.disconnect(); } catch (_) {}
+            floatingMenuObserver = null;
+        }
     }
 
     function createFloatingMenu(anchor) {
@@ -623,7 +650,27 @@
         const rect=anchor.getBoundingClientRect(); let left=rect.right+4; let top=rect.top; const width=220;
         if(left+width>window.innerWidth-4) left=Math.max(4,rect.left-width-4);
         panel.style.left=`${left}px`; panel.style.top=`${Math.max(4,Math.min(top,window.innerHeight-120))}px`;
-        setTimeout(()=>{ const close=event=>{ if(!panel.contains(event.target)&&event.target!==anchor){ removeFloatingMenu(); document.removeEventListener("mousedown",close,true); } }; document.addEventListener("mousedown",close,true); },0);
+        setTimeout(()=>{
+            const close=event=>{
+                if(!panel.contains(event.target)&&event.target!==anchor){
+                    removeFloatingMenu();
+                    document.removeEventListener("mousedown",close,true);
+                }
+            };
+            document.addEventListener("mousedown",close,true);
+        },0);
+
+        // The PORTAL parent context menu may close without generating a click on us.
+        // Watch for that menu/anchor disappearing and close the floating panel too.
+        try {
+            floatingMenuObserver = new MutationObserver(() => {
+                const nativeMenu = document.querySelector(".bf6-experience-manager-options-submenu");
+                if (!panel.isConnected || !anchor.isConnected || !nativeMenu || !nativeMenu.isConnected) {
+                    removeFloatingMenu();
+                }
+            });
+            floatingMenuObserver.observe(document.documentElement || document.body, { childList: true, subtree: true });
+        } catch (_) {}
     }
 
     function addSelectionListMenu(submenu) {
@@ -631,7 +678,7 @@
         if (submenu.querySelector('[data-selection-list-plugin="root"]')) return;
 
         const root = document.createElement("div");
-        root.className = "bf6-options-menu-item";
+        root.className = "selection-list-plugin-root";
         root.setAttribute("data-selection-list-plugin", "root");
         Object.assign(root.style, {
             padding: "5px 18px",
@@ -666,7 +713,14 @@
     }
 
     function scan() {
+        const block = getCurrentContextBlock();
+        const eligible = isSelectionListBlock(block);
         const submenus = document.querySelectorAll(".bf6-experience-manager-options-submenu");
+        if (!eligible) {
+            submenus.forEach(submenu => submenu.querySelector('[data-selection-list-plugin="root"]')?.remove());
+            removeFloatingMenu();
+            return;
+        }
         for (const submenu of submenus) addSelectionListMenu(submenu);
     }
 
@@ -683,6 +737,7 @@
             const id = blockEl?.getAttribute?.("data-id") || blockEl?.dataset?.id || null;
             lastContextBlockId = id ? String(id) : null;
             lastContextBlock = getBlockFromId(lastContextBlockId);
+            removeFloatingMenu();
             setTimeout(scan, 0);
         } catch (_) {
             lastContextBlockId = null;
