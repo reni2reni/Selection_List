@@ -643,19 +643,18 @@
 
         const panel = document.createElement("div");
         panel.setAttribute("data-selection-list-plugin", "floating-root");
-        const host = anchor?.closest?.(".bf6-experience-manager-options-submenu") || document.body;
-        const hostRect = host !== document.body ? host.getBoundingClientRect() : { left: 0, top: 0 };
         const px = Number.isFinite(clientX) ? clientX : 0;
         const py = Number.isFinite(clientY) ? clientY : 0;
 
         Object.assign(panel.style, {
-            // Keep the panel inside PORTAL's Options submenu DOM so moving the
-            // pointer from Selection List to the three entries does not cause
-            // PORTAL to close the Options menu.  The plugin uses its own class
-            // names, so PORTAL's native submenu-item logic will not reposition it.
-            position: host === document.body ? "fixed" : "absolute",
-            left: `${Math.max(0, Math.round((host === document.body ? px : px - hostRect.left) + 26))}px`,
-            top: `${Math.max(0, Math.round(host === document.body ? py : py - hostRect.top))}px`,
+            // Fixed coordinates are based on the cursor position when
+            // Selection List receives hover, with a 26px horizontal offset.
+            // Because the panel remains a descendant of Selection List, the
+            // parent hover state stays active while entering any of the three
+            // entries.
+            position: "fixed",
+            left: `${Math.max(0, Math.round(px + 26))}px`,
+            top: `${Math.max(0, Math.round(py))}px`,
             minWidth: "190px",
             background: "rgb(22, 29, 30)",
             color: "#fff",
@@ -692,11 +691,12 @@
         ];
         entries.forEach(entry => panel.appendChild(entry));
 
-        // Do not put the panel inside PORTAL's menu item. PORTAL's own menu
-        // cleanup can remove/rebuild descendants while the pointer moves.
-        // The panel is positioned from the cursor at the moment Selection List
-        // receives hover, with a 26px horizontal gap.
-        host.appendChild(panel);
+        // Keep the three-item panel as a child of Selection List itself.
+        // This is important: moving the pointer from Selection List into the
+        // three entries must still count as hovering the parent item, so
+        // PORTAL does not close its Options menu. All three entries are added
+        // before attachment so PORTAL never sees a partially-built submenu.
+        anchor.appendChild(panel);
         return panel;
     }
 
