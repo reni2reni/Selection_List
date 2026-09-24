@@ -647,8 +647,13 @@
         panel.appendChild(menuItem("ListName → array", async () => { const data=getNamesOrAlert(); if(!data)return; await createTextArray(data.block,data.names); removeFloatingMenu(); }));
         panel.appendChild(menuItem("ListName → File", () => { const data=getNamesOrAlert(); if(!data)return; exportTextFile(data.block,data.names); removeFloatingMenu(); }));
         document.body.appendChild(panel);
-        const rect=anchor.getBoundingClientRect(); let left=rect.right+4; let top=rect.top; const width=220;
-        if(left+width>window.innerWidth-4) left=Math.max(4,rect.left-width-4);
+        const rect=anchor.getBoundingClientRect(); const width=220;
+        // Place the floating submenu to the LEFT and overlap the parent menu.
+        // This keeps the mouse path inside the menu area so it does not lose focus.
+        let left = rect.left - width + 24;
+        let top = rect.top;
+        if (left < 4) left = 4;
+        if (left + width > window.innerWidth - 4) left = Math.max(4, window.innerWidth - width - 4);
         panel.style.left=`${left}px`; panel.style.top=`${Math.max(4,Math.min(top,window.innerHeight-120))}px`;
         setTimeout(()=>{
             const close=event=>{
