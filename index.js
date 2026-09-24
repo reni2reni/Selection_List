@@ -1,7 +1,7 @@
 /* global BF2042Portal, _Blockly */
 (function () {
     "use strict";
-    
+
     // Selection_List: BF2042 Portal の「選択リスト」ブロックから項目名をテキスト出力する独立プラグイン
     const plugin = BF2042Portal.Plugins.getPlugin("Selection_List");
     let observer = null;
@@ -27,22 +27,42 @@
     }
 
     function isSelectionListBlock(block) {
-        if (!block) return false;
-        const type = String(block.type || "").toLowerCase();
-        if (/selection[_-]?list|list[_-]?selection/.test(type)) return true;
+        // まずはブロック種類の判定を行わず、どのブロック上でも
+        // 「オプション > Selection List」を表示する。
+        // 実際の選択リスト構造の判定は、後で対象ブロックの構造が
+        // 確定してから追加する。
+        return !!block;
+    }
 
-        let text = "";
-        try { text += " " + String(block.toString?.() || ""); } catch (_) {}
+    function getFieldValue(block, fieldName) {
+        try {
+            const field = typeof block.getField === "function" ? block.getField(fieldName) : null;
+            if (field) {
+                const value = typeof field.getValue === "function" ? field.getValue() :
+                    (typeof field.getText === "function" ? field.getText() : "");
+                if (value != null && String(value).trim() !== "") return String(value).trim();
+            }
+        } catch (_) {}
+
         try {
             for (const input of block.inputList || []) {
                 for (const field of input?.fieldRow || []) {
-                    try {
-                        text += " " + String(field.getText?.() ?? field.getValue?.() ?? "");
-                    } catch (_) {}
+                    if (String(field?.name || '') !== fieldName) continue;
+                    const value = typeof field.getValue === "function" ? field.getValue() :
+                        (typeof field.getText === "function" ? field.getText() : "");
+                    if (value != null && String(value).trim() !== "") return String(value).trim();
                 }
             }
         } catch (_) {}
-        return /選択リスト|selection\s*list/i.test(text);
+        return "";
+    }
+
+    function getSelectionListName(block) {
+        return getFieldValue(block, "VALUE-0");
+    }
+
+    function getSelectionItemName(block) {
+        return getFieldValue(block, "VALUE-1");
     }
 
     function cleanName(value) {
@@ -88,49 +108,23 @@
     function extractSelectionItemNames(block) {
         const result = [];
         const seen = new Set();
+        const listName = getSelectionListName(block);
+        if (!listName) return result;
 
-        // Selection List implementations commonly keep their entries in one of these arrays.
-        extractArrayProperty(block,
-            ["itemNames", "items", "listItems", "selectionItems", "options", "choices", "values"],
-            result, seen);
+        const ws = block.workspace || _Blockly?.getMainWorkspace?.();
+        const blocks = ws?.getAllBlocks?.(false) || [];
 
-        // Some versions expose item names through named fields/inputs.
-        try {
-            for (const input of block.inputList || []) {
-                for (const field of input?.fieldRow || []) {
-                    if (!field) continue;
-                    const fieldName = String(field.name || "").toUpperCase();
-                    if (!/(ITEM|OPTION|CHOICE|SELECTION|LIST|VALUE|NAME|TEXT)/.test(fieldName)) continue;
-                    let value = "";
-                    try { value = field.getText?.() ?? ""; } catch (_) {}
-                    if (!value) {
-                        try { value = field.getValue?.() ?? ""; } catch (_) {}
-                    }
-                    addUnique(result, seen, value);
-                }
-            }
-        } catch (_) {}
+        // 同じ VALUE-0（例: SoldierStateBool）を持つ
+        // SoldierStateBoolItem をすべて同じ Selection List の項目として扱う。
+        for (const candidate of blocks) {
+            if (!candidate || String(candidate.type || '') !== String(block.type || '')) continue;
+            if (getSelectionListName(candidate) !== listName) continue;
 
-        // Fallback: inspect descendant blocks whose type/name suggests a list item.
-        try {
-            const descendants = typeof block.getDescendants === "function"
-                ? block.getDescendants(false) || []
-                : [];
-            for (const child of descendants) {
-                const type = String(child?.type || "").toLowerCase();
-                if (!/(selection|list|option|choice|item)/.test(type)) continue;
-                for (const input of child.inputList || []) {
-                    for (const field of input?.fieldRow || []) {
-                        let value = "";
-                        try { value = field?.getText?.() ?? ""; } catch (_) {}
-                        if (!value) {
-                            try { value = field?.getValue?.() ?? ""; } catch (_) {}
-                        }
-                        addUnique(result, seen, value);
-                    }
-                }
-            }
-        } catch (_) {}
+            const itemName = getSelectionItemName(candidate);
+            if (!itemName || seen.has(itemName)) continue;
+            seen.add(itemName);
+            result.push(itemName);
+        }
 
         return result;
     }
