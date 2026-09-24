@@ -268,14 +268,84 @@
         return { x: 300, y: 300 };
     }
 
-    function buildClipboard(block, names) {
+    function yieldToUI() {
+        return new Promise(resolve => setTimeout(resolve, 0));
+    }
+
+    function createLoadingStatus(total) {
+        const wrap = document.createElement("div");
+        wrap.setAttribute("data-selection-list-plugin", "loading-status");
+        Object.assign(wrap.style, {
+            position: "fixed",
+            left: "50%",
+            top: "50%",
+            transform: "translate(-50%, -50%)",
+            width: "360px",
+            padding: "18px 20px",
+            background: "rgba(20, 26, 28, .96)",
+            color: "#fff",
+            border: "1px solid #4b5a5d",
+            borderRadius: "6px",
+            boxShadow: "0 6px 24px rgba(0,0,0,.55)",
+            zIndex: "2147483647",
+            fontFamily: "sans-serif",
+            pointerEvents: "none"
+        });
+        const title = document.createElement("div");
+        title.className = "selection-list-loading-title";
+        title.style.marginBottom = "10px";
+        title.style.fontSize = "14px";
+        const bar = document.createElement("div");
+        Object.assign(bar.style, { height: "8px", background: "#303b3d", borderRadius: "4px", overflow: "hidden" });
+        const fill = document.createElement("div");
+        Object.assign(fill.style, { height: "100%", width: "0%", background: "#4da3ff", transition: "width .08s linear" });
+        bar.appendChild(fill);
+        const count = document.createElement("div");
+        count.className = "selection-list-loading-count";
+        count.style.marginTop = "8px";
+        count.style.fontSize = "12px";
+        count.style.textAlign = "center";
+        wrap.append(title, bar, count);
+        document.body.appendChild(wrap);
+        wrap._title = title;
+        wrap._fill = fill;
+        wrap._count = count;
+        wrap._total = total;
+        return wrap;
+    }
+
+    function updateLoadingStatus(el, done, total) {
+        if (!el) return;
+        const pct = total ? Math.min(100, Math.round(done * 100 / total)) : 100;
+        const ja = getPortalLanguage() === "ja";
+        el._title.textContent = ja ? "読み込み中…" : "Loading…";
+        el._fill.style.width = pct + "%";
+        el._count.textContent = ja ? `${done} / ${total} 件 (${pct}%)` : `${done} / ${total} items (${pct}%)`;
+    }
+
+    function removeLoadingStatus(el) {
+        try { el?.remove?.(); } catch (_) {}
+    }
+
+    async function buildClipboard(block, names) {
         const MAX_ITEMS_PER_ARRAY = 256;
         const pos = getBlockPosition(block);
         const x = Number(pos.x.toFixed(6));
         const itemType = normalize(block?.type) || "MapsItem";
         const group = getFieldText(block, "VALUE-0");
         const chunks = [];
+        const total = names.length;
+        const showProgress = total > 0;
+        let progressBar = null;
 
+        if (showProgress) {
+            progressBar = createLoadingStatus(total);
+            updateLoadingStatus(progressBar, 0, total);
+            // Let the browser paint the status bar before the heavy JSON build.
+            await yieldToUI();
+        }
+
+        let processed = 0;
         for (let offset = 0, chunkIndex = 0; offset < names.length; offset += MAX_ITEMS_PER_ARRAY, chunkIndex++) {
             const chunk = names.slice(offset, offset + MAX_ITEMS_PER_ARRAY);
             const variable = names.length > MAX_ITEMS_PER_ARRAY
@@ -283,11 +353,13 @@
                 : findGlobalVariable(block);
             const blocks = [];
             const sourceIds = [];
+            const shouldCollapse = total > MAX_ITEMS_PER_ARRAY;
             const connections = [];
             let y = Number((pos.y + chunkIndex * 53 * Math.min(chunk.length, 256)).toFixed(6));
             let previousId = null;
 
-            chunk.forEach((name, localIndex) => {
+            for (let localIndex = 0; localIndex < chunk.length; localIndex++) {
+                const name = chunk[localIndex];
                 const setId = makeId("SetVar", offset + localIndex);
                 const refId = makeId("VarRef", offset + localIndex);
                 const numId = makeId("Num", offset + localIndex);
@@ -339,7 +411,12 @@
                 blocks.push(setBlock);
                 sourceIds.push(setId);
                 previousId = setId;
-            });
+                processed++;
+                if (progressBar && (processed % 16 === 0 || processed === total)) {
+                    updateLoadingStatus(progressBar, processed, total);
+                    await yieldToUI();
+                }
+            }
 
             const subroutineNumber = chunkIndex + 1;
             const subroutineName = `SUB_${getBaseVariableName(block)}_${String(subroutineNumber).padStart(2, "0")}`;
@@ -348,7 +425,7 @@
             const subroutineBlock = {
                 type: "subroutineBlock",
                 id: subroutineId,
-                collapsed: true,
+                collapsed: shouldCollapse,
                 extraState: {
                     subroutineName,
                     parameters: []
@@ -375,6 +452,11 @@
             });
         }
 
+        if (progressBar) {
+            updateLoadingStatus(progressBar, total, total);
+            await yieldToUI();
+            removeLoadingStatus(progressBar);
+        }
         const blocks = chunks.flatMap(c => c.blocks);
         const sourceIds = chunks.flatMap(c => c.sourceIds);
         const connections = chunks.flatMap(c => c.connections);
@@ -428,7 +510,7 @@
             alert(ja ? "このブロックから選択リストの候補を取得できませんでした。" : "No selection-list options could be found on this block.");
             return;
         }
-        const payload = buildClipboard(block, names);
+        const payload = await buildClipboard(block, names);
         const text = JSON.stringify(payload, null, 2);
         const ok = await copyToClipboard(text);
         if (!ok) {
@@ -454,7 +536,6 @@
         const base = getBaseVariableName(block);
         const group = getFieldText(block, "VALUE-0");
         const chunks = [];
-
         for (let offset = 0, chunkIndex = 0; offset < names.length; offset += MAX_ITEMS_PER_ARRAY, chunkIndex++) {
             const chunk = names.slice(offset, offset + MAX_ITEMS_PER_ARRAY);
             const variableName = names.length > MAX_ITEMS_PER_ARRAY
@@ -566,7 +647,7 @@
     }
 
     async function createParallel(block, names) {
-        const payload = buildClipboard(block, names);
+        const payload = await buildClipboard(block, names);
         const count = Math.ceil(names.length / 256);
         await copyPayloadAndAlert(block, payload,
             getPortalLanguage() === "ja"
