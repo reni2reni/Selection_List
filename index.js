@@ -562,7 +562,7 @@
     function menuItem(label, onClick, indent = false) {
         const item = document.createElement("div");
         item.className = "bf6-options-menu-item";
-        item.setAttribute("data-selection-list-plugin", "1");
+        item.setAttribute("data-selection-list-plugin", "item");
         Object.assign(item.style, {
             padding: "5px 18px",
             paddingLeft: indent ? "32px" : "18px",
@@ -572,8 +572,7 @@
             cursor: "pointer",
             fontSize: "15px",
             lineHeight: "1.3",
-            borderTop: "1px solid #3a4648",
-            marginTop: "3px"
+            borderTop: "1px solid #3a4648"
         });
         const labelEl = document.createElement("span");
         labelEl.className = "bf6-options-menu-label";
@@ -585,9 +584,149 @@
             event.preventDefault();
             event.stopPropagation();
             event.stopImmediatePropagation?.();
-            onClick();
+            try { onClick(); } catch (e) { console.error("Selection_List action failed", e); }
         }, true);
         return item;
+    }
+
+    function getCurrentContextBlock() {
+        return lastContextBlock || getBlockFromId(lastContextBlockId);
+    }
+
+    function getNamesOrAlert() {
+        const block = getCurrentContextBlock();
+        if (!block) {
+            alert(getPortalLanguage() === "ja" ? "右クリックしたブロックを取得できませんでした。" : "Could not get the context block.");
+            return null;
+        }
+        const names = extractSelectionItems(block);
+        if (!names.length) {
+            alert(getPortalLanguage() === "ja" ? "選択リストの候補を取得できませんでした。" : "No selection-list options could be found on this block.");
+            return null;
+        }
+        return { block, names };
+    }
+
+    function removeFloatingMenu() {
+        document.querySelectorAll('[data-selection-list-plugin="floating-root"]').forEach(el => el.remove());
+    }
+
+    function createFloatingMenu(anchor) {
+        removeFloatingMenu();
+
+        const panel = document.createElement("div");
+        panel.setAttribute("data-selection-list-plugin", "floating-root");
+        Object.assign(panel.style, {
+            position: "fixed",
+            left: "0px",
+            top: "0px",
+            minWidth: "190px",
+            background: "rgb(22, 29, 30)",
+            color: "#ffffff",
+            border: "1px solid #3a4648",
+            boxShadow: "0 3px 14px rgba(0,0,0,.45)",
+            zIndex: "2147483647",
+            padding: "2px 0"
+        });
+
+        const list = document.createElement("div");
+        list.textContent = "リスト  ›";
+        Object.assign(list.style, {
+            padding: "6px 18px",
+            cursor: "pointer",
+            whiteSpace: "nowrap",
+            position: "relative"
+        });
+        panel.appendChild(list);
+
+        const listPanel = document.createElement("div");
+        Object.assign(listPanel.style, {
+            display: "none",
+            position: "absolute",
+            left: "100%",
+            top: "0px",
+            minWidth: "180px",
+            background: "rgb(22, 29, 30)",
+            color: "#ffffff",
+            border: "1px solid #3a4648",
+            boxShadow: "0 3px 14px rgba(0,0,0,.45)",
+            padding: "2px 0",
+            zIndex: "2147483647"
+        });
+        list.appendChild(listPanel);
+
+        const nameGroup = document.createElement("div");
+        nameGroup.textContent = "リスト名  ›";
+        Object.assign(nameGroup.style, {
+            padding: "6px 18px",
+            cursor: "pointer",
+            whiteSpace: "nowrap",
+            position: "relative",
+            borderTop: "1px solid #3a4648"
+        });
+        panel.appendChild(nameGroup);
+
+        const namePanel = document.createElement("div");
+        Object.assign(namePanel.style, {
+            display: "none",
+            position: "absolute",
+            left: "100%",
+            top: "0px",
+            minWidth: "180px",
+            background: "rgb(22, 29, 30)",
+            color: "#ffffff",
+            border: "1px solid #3a4648",
+            boxShadow: "0 3px 14px rgba(0,0,0,.45)",
+            padding: "2px 0",
+            zIndex: "2147483647"
+        });
+        nameGroup.appendChild(namePanel);
+
+        list.addEventListener("mouseenter", () => { list.style.background = "rgb(48,60,62)"; listPanel.style.display = "block"; });
+        list.addEventListener("mouseleave", () => { list.style.background = "rgb(22,29,30)"; listPanel.style.display = "none"; });
+        nameGroup.addEventListener("mouseenter", () => { nameGroup.style.background = "rgb(48,60,62)"; namePanel.style.display = "block"; });
+        nameGroup.addEventListener("mouseleave", () => { nameGroup.style.background = "rgb(22,29,30)"; namePanel.style.display = "none"; });
+
+        listPanel.appendChild(menuItem("配列", async () => {
+            const data = getNamesOrAlert();
+            if (!data) return;
+            await createParallel(data.block, data.names);
+            removeFloatingMenu();
+        }));
+
+        namePanel.appendChild(menuItem("配列", async () => {
+            const data = getNamesOrAlert();
+            if (!data) return;
+            await createTextArray(data.block, data.names);
+            removeFloatingMenu();
+        }));
+
+        namePanel.appendChild(menuItem("ファイル", () => {
+            const data = getNamesOrAlert();
+            if (!data) return;
+            exportTextFile(data.block, data.names);
+            removeFloatingMenu();
+        }));
+
+        document.body.appendChild(panel);
+
+        const rect = anchor.getBoundingClientRect();
+        let left = rect.right + 4;
+        let top = rect.top;
+        const width = 220;
+        if (left + width > window.innerWidth - 4) left = Math.max(4, rect.left - width - 4);
+        panel.style.left = `${left}px`;
+        panel.style.top = `${Math.max(4, Math.min(top, window.innerHeight - 120))}px`;
+
+        setTimeout(() => {
+            const close = event => {
+                if (!panel.contains(event.target) && event.target !== anchor) {
+                    removeFloatingMenu();
+                    document.removeEventListener("mousedown", close, true);
+                }
+            };
+            document.addEventListener("mousedown", close, true);
+        }, 0);
     }
 
     function addSelectionListMenu(submenu) {
@@ -614,72 +753,18 @@
         title.textContent = "Selection List  ›";
         root.appendChild(title);
 
-        const flyout = document.createElement("div");
-        Object.assign(flyout.style, {
-            display: "none",
-            position: "absolute",
-            left: "100%",
-            top: "-4px",
-            minWidth: "210px",
-            background: "rgb(22, 29, 30)",
-            border: "1px solid #3a4648",
-            boxShadow: "0 3px 12px rgba(0,0,0,.35)",
-            zIndex: "999999"
-        });
-        root.appendChild(flyout);
+        root.addEventListener("mouseenter", () => root.style.background = "rgb(48,60,62)");
+        root.addEventListener("mouseleave", () => root.style.background = "rgb(22,29,30)");
 
-        const listTitle = getFieldText(lastContextBlock, "VALUE-0") || "リスト";
-        const textTitle = `${listTitle}  ›`;
+        // Native PORTAL menu can close its menu tree when a custom child is clicked.
+        // Therefore the second/third levels are rendered in a fixed floating panel.
+        root.addEventListener("click", event => {
+            event.preventDefault();
+            event.stopPropagation();
+            event.stopImmediatePropagation?.();
+            createFloatingMenu(root);
+        }, true);
 
-        const listGroup = document.createElement("div");
-        listGroup.className = "bf6-options-menu-item";
-        Object.assign(listGroup.style, { padding: "5px 18px", whiteSpace: "nowrap", background: "rgb(22,29,30)", color: "#fff", cursor: "pointer", fontSize: "15px", position: "relative" });
-        listGroup.textContent = "リスト  ›";
-        flyout.appendChild(listGroup);
-
-        const listFlyout = document.createElement("div");
-        Object.assign(listFlyout.style, { display: "none", position: "absolute", left: "100%", top: "-1px", minWidth: "180px", background: "rgb(22,29,30)", border: "1px solid #3a4648", zIndex: "1000000" });
-        listGroup.appendChild(listFlyout);
-        listGroup.addEventListener("mouseenter", () => listFlyout.style.display = "block");
-        listGroup.addEventListener("mouseleave", () => listFlyout.style.display = "none");
-
-        listFlyout.appendChild(menuItem("並列", () => {
-            const block = lastContextBlock || getBlockFromId(lastContextBlockId);
-            if (!block) return alert("右クリックしたブロックを取得できませんでした。");
-            const names = extractSelectionItems(block);
-            if (!names.length) return alert("選択リストの候補を取得できませんでした。");
-            createParallel(block, names);
-        }, true));
-
-        const nameGroup = document.createElement("div");
-        nameGroup.className = "bf6-options-menu-item";
-        Object.assign(nameGroup.style, { padding: "5px 18px", whiteSpace: "nowrap", background: "rgb(22,29,30)", color: "#fff", cursor: "pointer", fontSize: "15px", position: "relative", borderTop: "1px solid #3a4648" });
-        nameGroup.textContent = `${textTitle}`;
-        flyout.appendChild(nameGroup);
-
-        const nameFlyout = document.createElement("div");
-        Object.assign(nameFlyout.style, { display: "none", position: "absolute", left: "100%", top: "-1px", minWidth: "180px", background: "rgb(22,29,30)", border: "1px solid #3a4648", zIndex: "1000000" });
-        nameGroup.appendChild(nameFlyout);
-        nameGroup.addEventListener("mouseenter", () => nameFlyout.style.display = "block");
-        nameGroup.addEventListener("mouseleave", () => nameFlyout.style.display = "none");
-
-        nameFlyout.appendChild(menuItem("配列", () => {
-            const block = lastContextBlock || getBlockFromId(lastContextBlockId);
-            if (!block) return alert("右クリックしたブロックを取得できませんでした。");
-            const names = extractSelectionItems(block);
-            if (!names.length) return alert("選択リストの候補を取得できませんでした。");
-            createTextArray(block, names);
-        }, true));
-        nameFlyout.appendChild(menuItem("ファイル", () => {
-            const block = lastContextBlock || getBlockFromId(lastContextBlockId);
-            if (!block) return alert("右クリックしたブロックを取得できませんでした。");
-            const names = extractSelectionItems(block);
-            if (!names.length) return alert("選択リストの候補を取得できませんでした。");
-            exportTextFile(block, names);
-        }, true));
-
-        root.addEventListener("mouseenter", () => { root.style.background = "rgb(48,60,62)"; flyout.style.display = "block"; });
-        root.addEventListener("mouseleave", () => { root.style.background = "rgb(22,29,30)"; flyout.style.display = "none"; });
         submenu.appendChild(root);
     }
 
