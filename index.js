@@ -163,13 +163,42 @@
         return [...new Set(out.filter(Boolean))];
     }
 
-    function findGlobalVariable(block) {
+    function getBaseVariableName(block) {
+        const group = getFieldText(block, "VALUE-0");
+        const type = normalize(block?.type || "");
+        const out = [];
+        if (group) {
+            const singular = group.endsWith("s") && group.length > 1 ? group.slice(0, -1) : group;
+            out.push(singular.toUpperCase());
+            out.push(group.toUpperCase());
+        }
+        if (type.endsWith("Item")) {
+            const base = type.slice(0, -4);
+            out.push(base.toUpperCase());
+        }
+        if (type === "MapsItem") out.unshift("MAP");
+        return [...new Set(out.filter(Boolean))][0] || "MAP";
+    }
+
+    function variableNameCandidates(block, suffix = "") {
+        const base = getBaseVariableName(block);
+        const names = [];
+        if (suffix) {
+            names.push(`${base}_${suffix}`);
+            names.push(`${base}${suffix}`);
+        } else {
+            names.push(base);
+        }
+        return names;
+    }
+
+    function findGlobalVariable(block, suffix = "") {
         const ws = getWorkspace();
-        const candidates = variableNameCandidates(block);
+        const candidates = variableNameCandidates(block, suffix);
         try {
             const vars = ws?.getAllVariables?.() || [];
             for (const candidate of candidates) {
-                const hit = vars.find(v => normalize(v?.name).toUpperCase() === candidate && normalize(v?.type || "Global") === "Global");
+                const hit = vars.find(v => normalize(v?.name).toUpperCase() === candidate.toUpperCase() && normalize(v?.type || "Global") === "Global");
                 if (hit) return { id: hit.getId?.() || hit.id || "", name: hit.name, type: "Global" };
             }
         } catch (_) {}
@@ -193,74 +222,90 @@
     }
 
     function buildClipboard(block, names) {
-        const variable = findGlobalVariable(block);
+        const MAX_ITEMS_PER_ARRAY = 256;
         const pos = getBlockPosition(block);
-        const blocks = [];
-        const sourceIds = [];
-        const connections = [];
         const x = Number(pos.x.toFixed(6));
-        let y = Number(pos.y.toFixed(6));
-        let previousId = null;
+        const itemType = normalize(block?.type) || "MapsItem";
+        const group = getFieldText(block, "VALUE-0");
+        const chunks = [];
 
-        names.forEach((name, index) => {
-            const setId = makeId("SetVar", index);
-            const refId = makeId("VarRef", index);
-            const numId = makeId("Num", index);
-            const itemId = makeId("Item", index);
+        for (let offset = 0, chunkIndex = 0; offset < names.length; offset += MAX_ITEMS_PER_ARRAY, chunkIndex++) {
+            const chunk = names.slice(offset, offset + MAX_ITEMS_PER_ARRAY);
+            const variable = names.length > MAX_ITEMS_PER_ARRAY
+                ? findGlobalVariable(block, chunkIndex + 1)
+                : findGlobalVariable(block);
+            const blocks = [];
+            const sourceIds = [];
+            const connections = [];
+            let y = Number((pos.y + chunkIndex * 53 * Math.min(chunk.length, 256)).toFixed(6));
+            let previousId = null;
 
-            const itemType = normalize(block?.type) || "MapsItem";
-            const group = getFieldText(block, "VALUE-0");
-
-            const setBlock = {
-                type: "SetVariableAtIndex",
-                id: setId,
-                inputs: {
-                    "VALUE-0": {
-                        block: {
-                            type: "variableReferenceBlock",
-                            id: refId,
-                            extraState: { isObjectVar: false },
-                            fields: {
-                                OBJECTTYPE: "Global",
-                                VAR: {
-                                    id: variable.id || makeId("Var", 0),
-                                    name: variable.name,
-                                    type: "Global"
+            chunk.forEach((name, localIndex) => {
+                const setId = makeId("SetVar", offset + localIndex);
+                const refId = makeId("VarRef", offset + localIndex);
+                const numId = makeId("Num", offset + localIndex);
+                const itemId = makeId("Item", offset + localIndex);
+                const setBlock = {
+                    type: "SetVariableAtIndex",
+                    id: setId,
+                    inputs: {
+                        "VALUE-0": {
+                            block: {
+                                type: "variableReferenceBlock",
+                                id: refId,
+                                extraState: { isObjectVar: false },
+                                fields: {
+                                    OBJECTTYPE: "Global",
+                                    VAR: {
+                                        id: variable.id || makeId("Var", chunkIndex),
+                                        name: variable.name,
+                                        type: "Global"
+                                    }
+                                }
+                            }
+                        },
+                        "VALUE-1": {
+                            block: {
+                                type: "Number",
+                                id: numId,
+                                fields: { NUM: localIndex }
+                            }
+                        },
+                        "VALUE-2": {
+                            block: {
+                                type: itemType,
+                                id: itemId,
+                                fields: {
+                                    "VALUE-0": group,
+                                    "VALUE-1": name
                                 }
                             }
                         }
                     },
-                    "VALUE-1": {
-                        block: {
-                            type: "Number",
-                            id: numId,
-                            fields: { NUM: index }
-                        }
-                    },
-                    "VALUE-2": {
-                        block: {
-                            type: itemType,
-                            id: itemId,
-                            fields: {
-                                "VALUE-0": group,
-                                "VALUE-1": name
-                            }
-                        }
-                    }
-                },
-                _bf6Position: { x, y: Number((y + index * 53).toFixed(6)) }
-            };
-            blocks.push(setBlock);
-            sourceIds.push(setId);
-            if (previousId) connections.push({ from: previousId, to: setId });
-            previousId = setId;
-        });
+                    _bf6Position: { x, y: Number((y + localIndex * 53).toFixed(6)) }
+                };
+                blocks.push(setBlock);
+                sourceIds.push(setId);
+                if (previousId) connections.push({ from: previousId, to: setId });
+                previousId = setId;
+            });
 
+            chunks.push({ blocks, sourceIds, connections, variableName: variable.name });
+        }
+
+        const blocks = chunks.flatMap(c => c.blocks);
+        const sourceIds = chunks.flatMap(c => c.sourceIds);
+        const connections = chunks.flatMap(c => c.connections);
         return {
             _bf6MultiBlockClipboard: 1,
             blocks,
             sourceIds,
-            connections
+            connections,
+            _selectionListChunks: chunks.map((c, i) => ({
+                index: i + 1,
+                variable: c.variableName,
+                count: c.blocks.length
+            }))
         };
     }
 
@@ -307,9 +352,16 @@
             alert(ja ? "クリップボードへのコピーに失敗しました。" : "Failed to copy to clipboard.");
             return;
         }
-        alert(ja
-            ? `${names.length}個の選択肢を配列変数「${findGlobalVariable(block).name}」へ入れるブロックをクリップボードにコピーしました。`
-            : `Copied ${names.length} blocks for array variable "${findGlobalVariable(block).name}" to the clipboard.`);
+        if (names.length > 256) {
+            const count = Math.ceil(names.length / 256);
+            alert(ja
+                ? `${names.length}個の選択肢を256個ずつ${count}個の配列変数に分割してクリップボードへコピーしました。`
+                : `Copied ${names.length} options split into ${count} array variables (max 256 each) to the clipboard.`);
+        } else {
+            alert(ja
+                ? `${names.length}個の選択肢を配列変数「${findGlobalVariable(block).name}」へ入れるブロックをクリップボードにコピーしました。`
+                : `Copied ${names.length} blocks for array variable "${findGlobalVariable(block).name}" to the clipboard.`);
+        }
     }
 
     function addSelectionListItem(submenu) {
