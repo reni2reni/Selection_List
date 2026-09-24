@@ -643,10 +643,19 @@
 
         const panel = document.createElement("div");
         panel.setAttribute("data-selection-list-plugin", "floating-root");
+        const host = anchor?.closest?.(".bf6-experience-manager-options-submenu") || document.body;
+        const hostRect = host !== document.body ? host.getBoundingClientRect() : { left: 0, top: 0 };
+        const px = Number.isFinite(clientX) ? clientX : 0;
+        const py = Number.isFinite(clientY) ? clientY : 0;
+
         Object.assign(panel.style, {
-            position: "fixed",
-            left: `${Math.max(0, Math.round((Number.isFinite(clientX) ? clientX : 0) + 26))}px`,
-            top: `${Math.max(0, Math.round(Number.isFinite(clientY) ? clientY : 0))}px`,
+            // Keep the panel inside PORTAL's Options submenu DOM so moving the
+            // pointer from Selection List to the three entries does not cause
+            // PORTAL to close the Options menu.  The plugin uses its own class
+            // names, so PORTAL's native submenu-item logic will not reposition it.
+            position: host === document.body ? "fixed" : "absolute",
+            left: `${Math.max(0, Math.round((host === document.body ? px : px - hostRect.left) + 26))}px`,
+            top: `${Math.max(0, Math.round(host === document.body ? py : py - hostRect.top))}px`,
             minWidth: "190px",
             background: "rgb(22, 29, 30)",
             color: "#fff",
@@ -687,7 +696,7 @@
         // cleanup can remove/rebuild descendants while the pointer moves.
         // The panel is positioned from the cursor at the moment Selection List
         // receives hover, with a 26px horizontal gap.
-        document.body.appendChild(panel);
+        host.appendChild(panel);
         return panel;
     }
 
