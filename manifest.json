@@ -1,0 +1,8 @@
+{
+  "id": "Block_Catalog",
+  "name": "Block_Catalog",
+  "version": "1.0.0",
+  "description": "Export BF2042 Portal block definitions to a text file",
+  "author": "reni2",
+  "main": "index.js"
+}
