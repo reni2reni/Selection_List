@@ -290,7 +290,38 @@
                 previousId = setId;
             });
 
-            chunks.push({ blocks, sourceIds, connections, variableName: variable.name });
+            const subroutineNumber = chunkIndex + 1;
+            const subroutineName = `SUB_${getBaseVariableName(block)}_${String(subroutineNumber).padStart(2, "0")}`;
+            const firstBlock = blocks[0] || null;
+            const subroutineId = makeId("Sub", subroutineNumber);
+            const subroutineBlock = {
+                type: "subroutineBlock",
+                id: subroutineId,
+                collapsed: true,
+                extraState: {
+                    subroutineName,
+                    parameters: []
+                },
+                fields: {
+                    SUBROUTINE_NAME: subroutineName
+                },
+                inputs: {
+                    ACTIONS: firstBlock ? { block: firstBlock } : {}
+                },
+                _bf6Position: { x, y: Number(y.toFixed(6)) }
+            };
+
+            // The individual SetVariableAtIndex blocks are now nested inside
+            // a collapsed subroutine so a large selection list does not flood
+            // the workspace when the clipboard payload is pasted.
+            chunks.push({
+                blocks: [subroutineBlock],
+                sourceIds: [subroutineId],
+                connections: [],
+                variableName: variable.name,
+                subroutineName,
+                itemCount: chunk.length
+            });
         }
 
         const blocks = chunks.flatMap(c => c.blocks);
@@ -304,7 +335,8 @@
             _selectionListChunks: chunks.map((c, i) => ({
                 index: i + 1,
                 variable: c.variableName,
-                count: c.blocks.length
+                count: c.itemCount || 0,
+                subroutine: c.subroutineName || ""
             }))
         };
     }
@@ -355,12 +387,12 @@
         if (names.length > 256) {
             const count = Math.ceil(names.length / 256);
             alert(ja
-                ? `${names.length}個の選択肢を256個ずつ${count}個の配列変数に分割してクリップボードへコピーしました。`
-                : `Copied ${names.length} options split into ${count} array variables (max 256 each) to the clipboard.`);
+                ? `${names.length}個の選択肢を256個ずつ${count}個の配列変数に分割し、それぞれを折りたたんだサブルーチンに入れてクリップボードへコピーしました。`
+                : `Copied ${names.length} options split into ${count} array variables, with each chunk wrapped in a collapsed subroutine.`);
         } else {
             alert(ja
-                ? `${names.length}個の選択肢を配列変数「${findGlobalVariable(block).name}」へ入れるブロックをクリップボードにコピーしました。`
-                : `Copied ${names.length} blocks for array variable "${findGlobalVariable(block).name}" to the clipboard.`);
+                ? `${names.length}個の選択肢を配列変数「${findGlobalVariable(block).name}」へ入れる折りたたみサブルーチンをクリップボードにコピーしました。`
+                : `Copied ${names.length} blocks for array variable "${findGlobalVariable(block).name}" inside a collapsed subroutine to the clipboard.`);
         }
     }
 
