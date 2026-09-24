@@ -506,8 +506,8 @@
                 : `Copied ${names.length} options split into ${count} array variables, with each chunk wrapped in a collapsed subroutine.`);
         } else {
             alert(ja
-                ? `${names.length}個の選択肢を配列変数「${findGlobalVariable(block).name}」へ入れる折りたたみサブルーチンをクリップボードにコピーしました。`
-                : `Copied ${names.length} blocks for array variable "${findGlobalVariable(block).name}" inside a collapsed subroutine to the clipboard.`);
+                ? `${names.length}個の選択肢を配列変数「${findGlobalVariable(block).name}」へ入れる展開したサブルーチンをクリップボードにコピーしました。`
+                : `Copied ${names.length} blocks for array variable "${findGlobalVariable(block).name}" inside an expanded subroutine to the clipboard.`);
         }
     }
 
@@ -580,7 +580,7 @@
                 subroutine: {
                     type: "subroutineBlock",
                     id: subroutineId,
-                    collapsed: true,
+                    collapsed: names.length > MAX_ITEMS_PER_ARRAY,
                     extraState: { subroutineName, parameters: [] },
                     fields: { SUBROUTINE_NAME: subroutineName },
                     inputs: { ACTIONS: setBlocks[0] ? { block: setBlocks[0] } : {} },
@@ -826,7 +826,7 @@
                 subroutine: {
                     type: "subroutineBlock",
                     id: subroutineId,
-                    collapsed: true,
+                    collapsed: names.length > MAX_ITEMS_PER_ARRAY,
                     extraState: { subroutineName, parameters: [] },
                     fields: { SUBROUTINE_NAME: subroutineName },
                     inputs: { ACTIONS: setBlocks[0] ? { block: setBlocks[0] } : {} },
@@ -854,7 +854,7 @@
         await copyPayloadAndAlert(block, payload,
             getPortalLanguage() === "ja"
                 ? `${names.length}個を日本語名へ翻訳し、${count}個の折りたたみサブルーチンとしてクリップボードへコピーしました。`
-                : `Translated ${names.length} names to Japanese and copied them into ${count} collapsed subroutines.`);
+                : `Translated ${names.length} names to Japanese and copied them into ${count} subroutine(s).`);
     }
 
     function exportTextFile(block, names) {
