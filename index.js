@@ -284,9 +284,13 @@
                     },
                     _bf6Position: { x, y: Number((y + localIndex * 53).toFixed(6)) }
                 };
+                if (previousId) {
+                    const previous = blocks[blocks.length - 1];
+                    previous.next = { block: setBlock };
+                    connections.push({ from: previousId, to: setId });
+                }
                 blocks.push(setBlock);
                 sourceIds.push(setId);
-                if (previousId) connections.push({ from: previousId, to: setId });
                 previousId = setId;
             });
 
