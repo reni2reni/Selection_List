@@ -638,15 +638,15 @@
         }
     }
 
-    function createFloatingMenu(anchor) {
+    function createFloatingMenu(anchor, clientX, clientY) {
         removeFloatingMenu();
 
         const panel = document.createElement("div");
         panel.setAttribute("data-selection-list-plugin", "floating-root");
         Object.assign(panel.style, {
-            position: "absolute",
-            left: "26px",
-            top: "0px",
+            position: "fixed",
+            left: `${Math.max(0, Math.round((Number.isFinite(clientX) ? clientX : 0) + 26))}px`,
+            top: `${Math.max(0, Math.round(Number.isFinite(clientY) ? clientY : 0))}px`,
             minWidth: "190px",
             background: "rgb(22, 29, 30)",
             color: "#fff",
@@ -654,32 +654,40 @@
             boxShadow: "0 3px 14px rgba(0,0,0,.45)",
             zIndex: "2147483647",
             padding: "2px 0",
-            display: "block"
+            display: "flex",
+            flexDirection: "column",
+            pointerEvents: "auto"
         });
 
-        panel.appendChild(menuItem("List → array", async () => {
-            const data = getNamesOrAlert();
-            if (!data) return;
-            await createParallel(data.block, data.names);
-            removeFloatingMenu();
-        }));
-        panel.appendChild(menuItem("ListName → array", async () => {
-            const data = getNamesOrAlert();
-            if (!data) return;
-            await createTextArray(data.block, data.names);
-            removeFloatingMenu();
-        }));
-        panel.appendChild(menuItem("ListName → File", () => {
-            const data = getNamesOrAlert();
-            if (!data) return;
-            exportTextFile(data.block, data.names);
-            removeFloatingMenu();
-        }));
+        // Build all three entries before attaching the panel. This avoids
+        // PORTAL's MutationObserver reacting between individual insertions.
+        const entries = [
+            menuItem("List → array", async () => {
+                const data = getNamesOrAlert();
+                if (!data) return;
+                await createParallel(data.block, data.names);
+                removeFloatingMenu();
+            }),
+            menuItem("ListName → array", async () => {
+                const data = getNamesOrAlert();
+                if (!data) return;
+                await createTextArray(data.block, data.names);
+                removeFloatingMenu();
+            }),
+            menuItem("ListName → File", () => {
+                const data = getNamesOrAlert();
+                if (!data) return;
+                exportTextFile(data.block, data.names);
+                removeFloatingMenu();
+            })
+        ];
+        entries.forEach(entry => panel.appendChild(entry));
 
-        // Keep the submenu inside the Selection List item itself.
-        // This is important: PORTAL keeps the parent menu open while the
-        // pointer remains inside the item's DOM tree, just like its native options submenu.
-        anchor.appendChild(panel);
+        // Do not put the panel inside PORTAL's menu item. PORTAL's own menu
+        // cleanup can remove/rebuild descendants while the pointer moves.
+        // The panel is positioned from the cursor at the moment Selection List
+        // receives hover, with a 26px horizontal gap.
+        document.body.appendChild(panel);
         return panel;
     }
 
@@ -709,28 +717,30 @@
 
         let submenuOpen = false;
 
-        root.addEventListener("mouseenter", () => {
+        root.addEventListener("mouseenter", event => {
             root.style.background = "rgb(48,60,62)";
             if (!submenuOpen) {
                 submenuOpen = true;
-                createFloatingMenu(root);
+                createFloatingMenu(root, event.clientX, event.clientY);
             }
         });
 
         root.addEventListener("mouseleave", event => {
             root.style.background = "rgb(22,29,30)";
-            // Do not close when moving from Selection List into its child panel.
-            if (event.relatedTarget && root.contains(event.relatedTarget)) return;
+            // Keep the submenu alive while the pointer is over the floating panel.
+            const panel = document.querySelector('[data-selection-list-plugin="floating-root"]');
+            if (panel && event.relatedTarget && panel.contains(event.relatedTarget)) return;
             submenuOpen = false;
             removeFloatingMenu();
         });
 
-        // Keep this as hover-only, matching PORTAL's native Options behavior.
-        // No click handler: clicking a parent menu item must not toggle/remove the submenu.
-        root.addEventListener("mousemove", () => {
-            if (!submenuOpen) {
+        // Hover only, matching PORTAL's native Options behavior. If the parent
+        // menu is rebuilt, re-create the three entries from the current cursor.
+        root.addEventListener("mousemove", event => {
+            const panel = document.querySelector('[data-selection-list-plugin="floating-root"]');
+            if (!submenuOpen || !panel) {
                 submenuOpen = true;
-                createFloatingMenu(root);
+                createFloatingMenu(root, event.clientX, event.clientY);
             }
         });
 
