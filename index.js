@@ -575,7 +575,7 @@
             borderTop: "1px solid #3a4648"
         });
         const labelEl = document.createElement("span");
-        labelEl.className = "bf6-options-menu-label";
+        labelEl.className = "selection-list-plugin-menu-label";
         labelEl.textContent = label;
         item.appendChild(labelEl);
         item.addEventListener("mouseenter", () => item.style.background = "rgb(48, 60, 62)");
