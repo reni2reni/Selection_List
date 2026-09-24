@@ -613,8 +613,6 @@
 
     function isSelectionListBlock(block) {
         if (!block) return false;
-        // Selection-list blocks exposed by PORTAL are the *Item block types.
-        // Keep the field check as a fallback for variants whose type name differs.
         const type = normalize(block.type);
         if (/Item$/i.test(type)) {
             const names = extractSelectionItems(block);
@@ -642,44 +640,47 @@
 
     function createFloatingMenu(anchor) {
         removeFloatingMenu();
+
         const panel = document.createElement("div");
         panel.setAttribute("data-selection-list-plugin", "floating-root");
-        Object.assign(panel.style, { position:"fixed", left:"0px", top:"0px", minWidth:"190px", background:"rgb(22, 29, 30)", color:"#fff", border:"1px solid #3a4648", boxShadow:"0 3px 14px rgba(0,0,0,.45)", zIndex:"2147483647", padding:"2px 0" });
-        panel.appendChild(menuItem("List → array", async () => { const data=getNamesOrAlert(); if(!data)return; await createParallel(data.block,data.names); removeFloatingMenu(); }));
-        panel.appendChild(menuItem("ListName → array", async () => { const data=getNamesOrAlert(); if(!data)return; await createTextArray(data.block,data.names); removeFloatingMenu(); }));
-        panel.appendChild(menuItem("ListName → File", () => { const data=getNamesOrAlert(); if(!data)return; exportTextFile(data.block,data.names); removeFloatingMenu(); }));
-        document.body.appendChild(panel);
-        // Show the floating submenu 26px to the right of the Selection List click
-        // position. This leaves enough room for the cursor without closing the menu.
-        // Do not derive the position from the parent menu DOM; PORTAL can reposition it.
-        // parent menu DOM; PORTAL can reposition that menu dynamically.
-        const width = 220;
-        const left = Math.max(0, Math.min(lastContextMenuX, window.innerWidth - width));
-        const panelHeight = Math.min(140, window.innerHeight);
-        const top = Math.max(0, Math.min(lastContextMenuY, window.innerHeight - panelHeight));
-        panel.style.left = `${left}px`;
-        panel.style.top = `${top}px`;
-        setTimeout(()=>{
-            const close=event=>{
-                if(!panel.contains(event.target)&&event.target!==anchor){
-                    removeFloatingMenu();
-                    document.removeEventListener("mousedown",close,true);
-                }
-            };
-            document.addEventListener("mousedown",close,true);
-        },0);
+        Object.assign(panel.style, {
+            position: "absolute",
+            left: "26px",
+            top: "0px",
+            minWidth: "190px",
+            background: "rgb(22, 29, 30)",
+            color: "#fff",
+            border: "1px solid #3a4648",
+            boxShadow: "0 3px 14px rgba(0,0,0,.45)",
+            zIndex: "2147483647",
+            padding: "2px 0",
+            display: "block"
+        });
 
-        // The PORTAL parent context menu may close without generating a click on us.
-        // Watch for that menu/anchor disappearing and close the floating panel too.
-        try {
-            floatingMenuObserver = new MutationObserver(() => {
-                const nativeMenu = document.querySelector(".bf6-experience-manager-options-submenu");
-                if (!panel.isConnected || !anchor.isConnected || !nativeMenu || !nativeMenu.isConnected) {
-                    removeFloatingMenu();
-                }
-            });
-            floatingMenuObserver.observe(document.documentElement || document.body, { childList: true, subtree: true });
-        } catch (_) {}
+        panel.appendChild(menuItem("List → array", async () => {
+            const data = getNamesOrAlert();
+            if (!data) return;
+            await createParallel(data.block, data.names);
+            removeFloatingMenu();
+        }));
+        panel.appendChild(menuItem("ListName → array", async () => {
+            const data = getNamesOrAlert();
+            if (!data) return;
+            await createTextArray(data.block, data.names);
+            removeFloatingMenu();
+        }));
+        panel.appendChild(menuItem("ListName → File", () => {
+            const data = getNamesOrAlert();
+            if (!data) return;
+            exportTextFile(data.block, data.names);
+            removeFloatingMenu();
+        }));
+
+        // Keep the submenu inside the Selection List item itself.
+        // This is important: PORTAL keeps the parent menu open while the
+        // pointer remains inside the item's DOM tree, just like its native options submenu.
+        anchor.appendChild(panel);
+        return panel;
     }
 
     function addSelectionListMenu(submenu) {
@@ -706,21 +707,32 @@
         title.textContent = "Selection List  ›";
         root.appendChild(title);
 
-        root.addEventListener("mouseenter", () => root.style.background = "rgb(48,60,62)");
-        root.addEventListener("mouseleave", () => root.style.background = "rgb(22,29,30)");
+        let submenuOpen = false;
 
-        // Native PORTAL menu can close its menu tree when a custom child is clicked.
-        // Therefore the second/third levels are rendered in a fixed floating panel.
-        root.addEventListener("click", event => {
-            event.preventDefault();
-            event.stopPropagation();
-            event.stopImmediatePropagation?.();
-            // Use the cursor position at the moment Selection List is activated,
-            // not the position from the original block right-click.
-            if (Number.isFinite(event.clientX)) lastContextMenuX = event.clientX + 26;
-            if (Number.isFinite(event.clientY)) lastContextMenuY = event.clientY;
-            createFloatingMenu(root);
-        }, true);
+        root.addEventListener("mouseenter", () => {
+            root.style.background = "rgb(48,60,62)";
+            if (!submenuOpen) {
+                submenuOpen = true;
+                createFloatingMenu(root);
+            }
+        });
+
+        root.addEventListener("mouseleave", event => {
+            root.style.background = "rgb(22,29,30)";
+            // Do not close when moving from Selection List into its child panel.
+            if (event.relatedTarget && root.contains(event.relatedTarget)) return;
+            submenuOpen = false;
+            removeFloatingMenu();
+        });
+
+        // Keep this as hover-only, matching PORTAL's native Options behavior.
+        // No click handler: clicking a parent menu item must not toggle/remove the submenu.
+        root.addEventListener("mousemove", () => {
+            if (!submenuOpen) {
+                submenuOpen = true;
+                createFloatingMenu(root);
+            }
+        });
 
         submenu.appendChild(root);
     }
