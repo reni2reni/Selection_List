@@ -1,7 +1,7 @@
 /* global BF2042Portal, _Blockly */
 (function () {
     "use strict";
-
+    
     // Selection_List: BF2042 Portal の「選択リスト」ブロックから項目名をテキスト出力する独立プラグイン
     const plugin = BF2042Portal.Plugins.getPlugin("Selection_List");
     let observer = null;
