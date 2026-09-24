@@ -608,6 +608,8 @@
     }
 
     let floatingMenuObserver = null;
+    let lastContextMenuX = 0;
+    let lastContextMenuY = 0;
 
     function isSelectionListBlock(block) {
         if (!block) return false;
@@ -647,14 +649,15 @@
         panel.appendChild(menuItem("ListName → array", async () => { const data=getNamesOrAlert(); if(!data)return; await createTextArray(data.block,data.names); removeFloatingMenu(); }));
         panel.appendChild(menuItem("ListName → File", () => { const data=getNamesOrAlert(); if(!data)return; exportTextFile(data.block,data.names); removeFloatingMenu(); }));
         document.body.appendChild(panel);
-        const rect=anchor.getBoundingClientRect(); const width=220;
-        // Place the floating submenu to the LEFT and overlap the parent menu.
-        // This keeps the mouse path inside the menu area so it does not lose focus.
-        let left = rect.left - width + 24;
-        let top = rect.top;
-        if (left < 4) left = 4;
-        if (left + width > window.innerWidth - 4) left = Math.max(4, window.innerWidth - width - 4);
-        panel.style.left=`${left}px`; panel.style.top=`${Math.max(4,Math.min(top,window.innerHeight-120))}px`;
+        // Show the floating submenu with its TOP-LEFT corner at the original
+        // right-click mouse position. Do not derive the position from the
+        // parent menu DOM; PORTAL can reposition that menu dynamically.
+        const width = 220;
+        const left = Math.max(0, Math.min(lastContextMenuX, window.innerWidth - width));
+        const panelHeight = Math.min(140, window.innerHeight);
+        const top = Math.max(0, Math.min(lastContextMenuY, window.innerHeight - panelHeight));
+        panel.style.left = `${left}px`;
+        panel.style.top = `${top}px`;
         setTimeout(()=>{
             const close=event=>{
                 if(!panel.contains(event.target)&&event.target!==anchor){
@@ -738,6 +741,8 @@
 
     document.addEventListener("contextmenu", event => {
         try {
+            lastContextMenuX = Number.isFinite(event.clientX) ? event.clientX : 0;
+            lastContextMenuY = Number.isFinite(event.clientY) ? event.clientY : 0;
             const blockEl = event.target?.closest?.("g.blocklyDraggable");
             const id = blockEl?.getAttribute?.("data-id") || blockEl?.dataset?.id || null;
             lastContextBlockId = id ? String(id) : null;
