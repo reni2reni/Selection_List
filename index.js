@@ -400,15 +400,172 @@
         }
     }
 
-    function addSelectionListItem(submenu) {
-        if (!submenu || !submenu.isConnected) return;
-        if (submenu.querySelector('[data-selection-list-plugin="1"]')) return;
+    function createTextArrayClipboard(block, names) {
+        const MAX_ITEMS_PER_ARRAY = 256;
+        const pos = getBlockPosition(block);
+        const x = Number(pos.x.toFixed(6));
+        const base = getBaseVariableName(block);
+        const group = getFieldText(block, "VALUE-0");
+        const chunks = [];
 
+        for (let offset = 0, chunkIndex = 0; offset < names.length; offset += MAX_ITEMS_PER_ARRAY, chunkIndex++) {
+            const chunk = names.slice(offset, offset + MAX_ITEMS_PER_ARRAY);
+            const variableName = names.length > MAX_ITEMS_PER_ARRAY
+                ? `${base}_TEXT_${chunkIndex + 1}`
+                : `${base}_TEXT`;
+            const variable = findNamedGlobalVariable(variableName);
+            const setBlocks = [];
+            let previousId = null;
+
+            chunk.forEach((name, localIndex) => {
+                const setId = makeId("SetText", offset + localIndex);
+                const refId = makeId("TextVar", offset + localIndex);
+                const numId = makeId("TextNum", offset + localIndex);
+                const textId = makeId("Text", offset + localIndex);
+                const setBlock = {
+                    type: "SetVariableAtIndex",
+                    id: setId,
+                    inputs: {
+                        "VALUE-0": {
+                            block: {
+                                type: "variableReferenceBlock",
+                                id: refId,
+                                extraState: { isObjectVar: false },
+                                fields: {
+                                    OBJECTTYPE: "Global",
+                                    VAR: {
+                                        id: variable.id || makeId("TextVarId", chunkIndex),
+                                        name: variable.name,
+                                        type: "Global"
+                                    }
+                                }
+                            }
+                        },
+                        "VALUE-1": {
+                            block: {
+                                type: "Number",
+                                id: numId,
+                                fields: { NUM: localIndex }
+                            }
+                        },
+                        "VALUE-2": {
+                            block: {
+                                type: "Text",
+                                id: textId,
+                                fields: { TEXT: name }
+                            }
+                        }
+                    },
+                    _bf6Position: { x, y: Number((pos.y + localIndex * 53).toFixed(6)) }
+                };
+                if (previousId) setBlocks[setBlocks.length - 1].next = { block: setBlock };
+                setBlocks.push(setBlock);
+                previousId = setId;
+            });
+
+            const subroutineNumber = chunkIndex + 1;
+            const subroutineName = `SUB_${base}_TEXT${String(subroutineNumber).padStart(2, "0")}`;
+            const subroutineId = makeId("SubText", subroutineNumber);
+            chunks.push({
+                subroutine: {
+                    type: "subroutineBlock",
+                    id: subroutineId,
+                    collapsed: true,
+                    extraState: { subroutineName, parameters: [] },
+                    fields: { SUBROUTINE_NAME: subroutineName },
+                    inputs: { ACTIONS: setBlocks[0] ? { block: setBlocks[0] } : {} },
+                    _bf6Position: { x, y: Number((pos.y + chunkIndex * 53 * 256).toFixed(6)) }
+                },
+                sourceId: subroutineId,
+                variableName: variable.name,
+                count: chunk.length,
+                subroutineName
+            });
+        }
+
+        return {
+            _bf6MultiBlockClipboard: 1,
+            blocks: chunks.map(c => c.subroutine),
+            sourceIds: chunks.map(c => c.sourceId),
+            connections: [],
+            _selectionListChunks: chunks.map((c, i) => ({
+                index: i + 1,
+                variable: c.variableName,
+                count: c.count,
+                subroutine: c.subroutineName
+            }))
+        };
+    }
+
+    function findNamedGlobalVariable(name) {
+        const ws = getWorkspace();
+        try {
+            const vars = ws?.getAllVariables?.() || [];
+            const hit = vars.find(v => normalize(v?.name).toUpperCase() === normalize(name).toUpperCase() && normalize(v?.type || "Global") === "Global");
+            if (hit) return { id: hit.getId?.() || hit.id || "", name: hit.name, type: "Global" };
+        } catch (_) {}
+        return { id: "", name, type: "Global" };
+    }
+
+    async function copyPayloadAndAlert(block, payload, message) {
+        const text = JSON.stringify(payload, null, 2);
+        const ok = await copyToClipboard(text);
+        if (!ok) {
+            alert(getPortalLanguage() === "ja" ? "クリップボードへのコピーに失敗しました。" : "Failed to copy to clipboard.");
+            return false;
+        }
+        alert(message);
+        return true;
+    }
+
+    async function createParallel(block, names) {
+        const payload = buildClipboard(block, names);
+        const count = Math.ceil(names.length / 256);
+        await copyPayloadAndAlert(block, payload,
+            getPortalLanguage() === "ja"
+                ? `${names.length}個を256個ずつ${count}個のサブルーチンに分けてクリップボードへコピーしました。`
+                : `Copied ${names.length} items into ${count} collapsed subroutines (256 per array).`);
+    }
+
+    async function createTextArray(block, names) {
+        const payload = createTextArrayClipboard(block, names);
+        const count = Math.ceil(names.length / 256);
+        await copyPayloadAndAlert(block, payload,
+            getPortalLanguage() === "ja"
+                ? `${names.length}個の名称をテキスト配列として${count}個の折りたたみサブルーチンにしてクリップボードへコピーしました。`
+                : `Copied ${names.length} names as text arrays in ${count} collapsed subroutines.`);
+    }
+
+    function exportTextFile(block, names) {
+        const group = getFieldText(block, "VALUE-0") || getBaseVariableName(block);
+        const filename = `${group}_list.txt`;
+        const text = names.join("\r\n") + "\r\n";
+        try {
+            const blob = new Blob(["\uFEFF", text], { type: "text/plain;charset=utf-8" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = filename;
+            a.style.display = "none";
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+            alert(getPortalLanguage() === "ja"
+                ? `${names.length}個の名称を「${filename}」へ出力しました。`
+                : `Exported ${names.length} names to "${filename}".`);
+        } catch (_) {
+            alert(getPortalLanguage() === "ja" ? "テキストファイルの出力に失敗しました。" : "Failed to export the text file.");
+        }
+    }
+
+    function menuItem(label, onClick, indent = false) {
         const item = document.createElement("div");
         item.className = "bf6-options-menu-item";
         item.setAttribute("data-selection-list-plugin", "1");
         Object.assign(item.style, {
             padding: "5px 18px",
+            paddingLeft: indent ? "32px" : "18px",
             whiteSpace: "nowrap",
             background: "rgb(22, 29, 30)",
             color: "#ffffff",
@@ -418,24 +575,117 @@
             borderTop: "1px solid #3a4648",
             marginTop: "3px"
         });
-        const label = document.createElement("span");
-        label.className = "bf6-options-menu-label";
-        label.textContent = "Selection List";
-        item.appendChild(label);
+        const labelEl = document.createElement("span");
+        labelEl.className = "bf6-options-menu-label";
+        labelEl.textContent = label;
+        item.appendChild(labelEl);
         item.addEventListener("mouseenter", () => item.style.background = "rgb(48, 60, 62)");
         item.addEventListener("mouseleave", () => item.style.background = "rgb(22, 29, 30)");
         item.addEventListener("click", event => {
             event.preventDefault();
             event.stopPropagation();
             event.stopImmediatePropagation?.();
-            createAndCopy();
+            onClick();
         }, true);
-        submenu.appendChild(item);
+        return item;
+    }
+
+    function addSelectionListMenu(submenu) {
+        if (!submenu || !submenu.isConnected) return;
+        if (submenu.querySelector('[data-selection-list-plugin="root"]')) return;
+
+        const root = document.createElement("div");
+        root.className = "bf6-options-menu-item";
+        root.setAttribute("data-selection-list-plugin", "root");
+        Object.assign(root.style, {
+            padding: "5px 18px",
+            whiteSpace: "nowrap",
+            background: "rgb(22, 29, 30)",
+            color: "#ffffff",
+            cursor: "pointer",
+            fontSize: "15px",
+            lineHeight: "1.3",
+            borderTop: "1px solid #3a4648",
+            marginTop: "3px",
+            position: "relative"
+        });
+
+        const title = document.createElement("span");
+        title.textContent = "Selection List  ›";
+        root.appendChild(title);
+
+        const flyout = document.createElement("div");
+        Object.assign(flyout.style, {
+            display: "none",
+            position: "absolute",
+            left: "100%",
+            top: "-4px",
+            minWidth: "210px",
+            background: "rgb(22, 29, 30)",
+            border: "1px solid #3a4648",
+            boxShadow: "0 3px 12px rgba(0,0,0,.35)",
+            zIndex: "999999"
+        });
+        root.appendChild(flyout);
+
+        const listTitle = getFieldText(lastContextBlock, "VALUE-0") || "リスト";
+        const textTitle = `${listTitle}  ›`;
+
+        const listGroup = document.createElement("div");
+        listGroup.className = "bf6-options-menu-item";
+        Object.assign(listGroup.style, { padding: "5px 18px", whiteSpace: "nowrap", background: "rgb(22,29,30)", color: "#fff", cursor: "pointer", fontSize: "15px", position: "relative" });
+        listGroup.textContent = "リスト  ›";
+        flyout.appendChild(listGroup);
+
+        const listFlyout = document.createElement("div");
+        Object.assign(listFlyout.style, { display: "none", position: "absolute", left: "100%", top: "-1px", minWidth: "180px", background: "rgb(22,29,30)", border: "1px solid #3a4648", zIndex: "1000000" });
+        listGroup.appendChild(listFlyout);
+        listGroup.addEventListener("mouseenter", () => listFlyout.style.display = "block");
+        listGroup.addEventListener("mouseleave", () => listFlyout.style.display = "none");
+
+        listFlyout.appendChild(menuItem("並列", () => {
+            const block = lastContextBlock || getBlockFromId(lastContextBlockId);
+            if (!block) return alert("右クリックしたブロックを取得できませんでした。");
+            const names = extractSelectionItems(block);
+            if (!names.length) return alert("選択リストの候補を取得できませんでした。");
+            createParallel(block, names);
+        }, true));
+
+        const nameGroup = document.createElement("div");
+        nameGroup.className = "bf6-options-menu-item";
+        Object.assign(nameGroup.style, { padding: "5px 18px", whiteSpace: "nowrap", background: "rgb(22,29,30)", color: "#fff", cursor: "pointer", fontSize: "15px", position: "relative", borderTop: "1px solid #3a4648" });
+        nameGroup.textContent = `${textTitle}`;
+        flyout.appendChild(nameGroup);
+
+        const nameFlyout = document.createElement("div");
+        Object.assign(nameFlyout.style, { display: "none", position: "absolute", left: "100%", top: "-1px", minWidth: "180px", background: "rgb(22,29,30)", border: "1px solid #3a4648", zIndex: "1000000" });
+        nameGroup.appendChild(nameFlyout);
+        nameGroup.addEventListener("mouseenter", () => nameFlyout.style.display = "block");
+        nameGroup.addEventListener("mouseleave", () => nameFlyout.style.display = "none");
+
+        nameFlyout.appendChild(menuItem("配列", () => {
+            const block = lastContextBlock || getBlockFromId(lastContextBlockId);
+            if (!block) return alert("右クリックしたブロックを取得できませんでした。");
+            const names = extractSelectionItems(block);
+            if (!names.length) return alert("選択リストの候補を取得できませんでした。");
+            createTextArray(block, names);
+        }, true));
+        nameFlyout.appendChild(menuItem("ファイル", () => {
+            const block = lastContextBlock || getBlockFromId(lastContextBlockId);
+            if (!block) return alert("右クリックしたブロックを取得できませんでした。");
+            const names = extractSelectionItems(block);
+            if (!names.length) return alert("選択リストの候補を取得できませんでした。");
+            exportTextFile(block, names);
+        }, true));
+
+        root.addEventListener("mouseenter", () => { root.style.background = "rgb(48,60,62)"; flyout.style.display = "block"; });
+        root.addEventListener("mouseleave", () => { root.style.background = "rgb(22,29,30)"; flyout.style.display = "none"; });
+        submenu.appendChild(root);
     }
 
     function scan() {
         const submenus = document.querySelectorAll(".bf6-experience-manager-options-submenu");
-        for (const submenu of submenus) addSelectionListItem(submenu);
+        for (const submenu of submenus) addSelectionListMenu(submenu);
     }
 
     function startObserver() {
