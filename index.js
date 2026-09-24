@@ -1,20 +1,275 @@
 /* global BF2042Portal, _Blockly */
-(function(){
-'use strict';
-const plugin=BF2042Portal.Plugins.getPlugin('Selection_List');
-let lastBlock=null,lastId=null,observer=null;
-function norm(v){return v==null?'':String(v).trim();}
-function getBlock(){try{return _Blockly?.getMainWorkspace?.()?.getBlockById?.(String(lastId||''))||null}catch(_){return null}}
-function safe(v){if(v===null||v===undefined)return v;if(typeof v==='function')return '[Function]';if(typeof v!=='object')return v;return undefined}
-function ownSummary(obj){if(!obj||typeof obj!=='object')return null;const o={};for(const k of Object.keys(obj)){const v=safe(obj[k]);if(v!==undefined)o[k]=v;}return o}
-function getDefinitions(){try{return BF2042Portal?.Startup?.getBlockDefinitions?.()}catch(_){return null}}
-function toolboxInfo(){const ws=_Blockly?.getMainWorkspace?.();const tb=ws?.getToolbox?.();if(!tb)return null;function walk(items,path=[]){if(!Array.isArray(items))return [];const out=[];for(let i=0;i<items.length;i++){const it=items[i];if(!it)continue;let name='';try{name=norm(it.getName?.())||norm(it.name)||norm(it.label)||norm(it.categoryName)||norm(it.category)}catch(_){};const contents=(()=>{try{const x=it.getContents?.();if(Array.isArray(x))return x}catch(_){}for(const k of ['contents_','contents','blocks','items'])try{if(Array.isArray(it[k]))return it[k]}catch(_){}return []})();out.push({path:path.concat(i),name,type:it.constructor?.name||'',summary:ownSummary(it),contents:contents.map((c,j)=>({index:j,type:c?.type||'',kind:c?.kind||'',name:norm(c?.name)||norm(c?.label)||'',summary:ownSummary(c)}))});out.push(...walk(contents,path.concat(i)));}return out}const roots=tb.getToolboxItems?.()||tb.contents_||[];return walk(roots)}
-function deepFindSelection(v,path=[],out=[],seen=new Set()){if(!v||typeof v!=='object'||seen.has(v)||out.length>500)return out;seen.add(v);if(Array.isArray(v)){v.forEach((x,i)=>deepFindSelection(x,path.concat(i),out,seen));return out}const text=Object.keys(v).join(' ')+' '+['name','label','category','categoryName','type','blockType','id'].map(k=>norm(v[k])).join(' ');if(/selection\s*list|選択リスト/i.test(text))out.push({path,summary:ownSummary(v)});for(const [k,c] of Object.entries(v)){if(k==='parent'||k==='workspace'||k==='svgRoot')continue;if(c&&typeof c==='object')deepFindSelection(c,path.concat(k),out,seen)}return out}
-function download(){const b=lastBlock||getBlock();const defs=getDefinitions();const report={generated:new Date().toISOString(),selectedBlock:b?{id:b.id,type:b.type,fields:{}}:null,selectedBlockSummary:ownSummary(b),toolbox:toolboxInfo(),definitionsSelectionHits:deepFindSelection(defs),definitionsTypeMatches:[],notes:'Diagnostic only. This file is intended to reveal the actual PORTAL Selection Lists structure.'};if(b){for(const input of b.inputList||[])for(const f of input?.fieldRow||[]){let val='';try{val=norm(f.getValue?.())||norm(f.getText?.())}catch(_){}if(f?.name)report.selectedBlock.fields[f.name]=val}}
-if(defs){const targetType=norm(b?.type);const seen=new Set();deepFindSelection(defs).forEach(()=>{});function walk(v,p=[],s=new Set()){if(!v||typeof v!=='object'||s.has(v))return;s.add(v);if(!Array.isArray(v)){const t=norm(v.type||v.blockType||v.kind||v.id);if(targetType&&t===targetType){const key=p.join('.');if(!seen.has(key)){seen.add(key);report.definitionsTypeMatches.push({path:p,summary:ownSummary(v)})}}for(const[k,c]of Object.entries(v)){if(k==='parent'||k==='workspace'||k==='svgRoot')continue;if(c&&typeof c==='object')walk(c,p.concat(k),s)}}else v.forEach((x,i)=>walk(x,p.concat(i),s))}walk(defs)}
-const blob=new Blob([JSON.stringify(report,null,2)],{type:'text/plain;charset=utf-8'});const u=URL.createObjectURL(blob);const a=document.createElement('a');a.href=u;a.download='Selection_List_Diagnostic.txt';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),1000)}
-function add(sub){if(!sub||sub.querySelector('[data-selection-list-debug]'))return;const d=document.createElement('div');d.className='bf6-options-menu-item';d.setAttribute('data-selection-list-debug','1');d.textContent='Selection List (Debug)';Object.assign(d.style,{padding:'5px 18px',whiteSpace:'nowrap',background:'rgb(22,29,30)',color:'#fff',cursor:'pointer',fontSize:'15px',lineHeight:'1.3',borderTop:'1px solid #3a4648',marginTop:'3px'});d.onclick=e=>{e.preventDefault();e.stopPropagation();download()};sub.appendChild(d)}
-function scan(){document.querySelectorAll('.bf6-experience-manager-options-submenu').forEach(add)}
-document.addEventListener('contextmenu',e=>{try{const el=e.target?.closest?.('g.blocklyDraggable');lastId=el?.getAttribute?.('data-id')||el?.dataset?.id||null;lastBlock=getBlock();setTimeout(scan,0)}catch(_){lastId=null;lastBlock=null}},true);
-plugin.initializeWorkspace=async function(){if(!observer){observer=new MutationObserver(scan);observer.observe(document.documentElement||document.body,{childList:true,subtree:true})}scan()};
+(function () {
+    "use strict";
+
+    // Selection_List
+    // 選択中ブロックの「選択リスト」フィールドそのものから、
+    // 現在値ではなく dropdown の全候補を取得して保存する。
+    const plugin = BF2042Portal.Plugins.getPlugin("Selection_List");
+    let observer = null;
+    let lastContextBlockId = null;
+    let lastContextBlock = null;
+
+    function getPortalLanguage() {
+        const candidates = [
+            document?.documentElement?.lang || "",
+            typeof navigator !== "undefined" ? navigator.language : ""
+        ];
+        const lang = candidates.find(v => typeof v === "string" && v.trim()) || "";
+        return lang.toLowerCase().startsWith("ja") ? "ja" : "en";
+    }
+
+    function getBlockFromId(id) {
+        if (!id) return null;
+        try {
+            const ws = _Blockly?.getMainWorkspace?.();
+            if (ws?.getBlockById) return ws.getBlockById(String(id));
+        } catch (_) {}
+        return null;
+    }
+
+    function normalize(value) {
+        if (value === null || value === undefined) return "";
+        if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+            return String(value).trim();
+        }
+        return "";
+    }
+
+    function addUnique(out, seen, value) {
+        const s = normalize(value);
+        if (!s || seen.has(s)) return;
+        seen.add(s);
+        out.push(s);
+    }
+
+    // Blockly FieldDropdown / Portal custom dropdown の候補を取得する。
+    function getFieldOptions(field) {
+        if (!field) return [];
+        const candidates = [];
+
+        // 標準Blockly API。useCache=false が重要で、現在選択中の値ではなく
+        // dropdown generator を再評価する。
+        try {
+            if (typeof field.getOptions === "function") {
+                const value = field.getOptions(false);
+                if (Array.isArray(value)) candidates.push(value);
+            }
+        } catch (_) {}
+
+        // カスタムFieldが getOptions を公開していない場合の補完。
+        for (const key of ["options_", "options", "menuGenerator_", "menuGenerator", "choices", "values"]) {
+            try {
+                const value = field[key];
+                if (Array.isArray(value)) candidates.push(value);
+                else if (typeof value === "function") {
+                    try {
+                        const generated = value.call(field);
+                        if (Array.isArray(generated)) candidates.push(generated);
+                    } catch (_) {}
+                }
+            } catch (_) {}
+        }
+
+        const out = [];
+        const seen = new Set();
+        for (const list of candidates) {
+            for (const option of list) {
+                if (Array.isArray(option)) {
+                    // Blockly dropdown: [displayText, value]
+                    addUnique(out, seen, option[0]);
+                } else if (option && typeof option === "object") {
+                    addUnique(out, seen, option.text);
+                    addUnique(out, seen, option.label);
+                    addUnique(out, seen, option.name);
+                    addUnique(out, seen, option.displayName);
+                    if (!out.length) addUnique(out, seen, option.value);
+                } else {
+                    addUnique(out, seen, option);
+                }
+            }
+        }
+        return out;
+    }
+
+    function getAllFields(block) {
+        const fields = [];
+        if (!block) return fields;
+
+        try {
+            if (Array.isArray(block.inputList)) {
+                for (const input of block.inputList) {
+                    if (Array.isArray(input?.fieldRow)) {
+                        for (const field of input.fieldRow) if (field) fields.push(field);
+                    }
+                }
+            }
+        } catch (_) {}
+
+        try {
+            if (typeof block.getFields === "function") {
+                const value = block.getFields();
+                if (Array.isArray(value)) fields.push(...value);
+            }
+        } catch (_) {}
+
+        // 重複除去
+        return [...new Set(fields)];
+    }
+
+    function getFieldCurrentValue(field) {
+        try {
+            if (typeof field.getValue === "function") return normalize(field.getValue());
+        } catch (_) {}
+        try {
+            if (typeof field.getText === "function") return normalize(field.getText());
+        } catch (_) {}
+        return "";
+    }
+
+    function isLikelySelectionField(field, options) {
+        if (!field || options.length < 2) return false;
+
+        const name = normalize(field.name).toLowerCase();
+        const ctor = normalize(field.constructor?.name).toLowerCase();
+        const text = normalize(field.getText?.()).toLowerCase();
+
+        // Selection List item の VALUE-1 はこのパターン。
+        if (name === "value-1") return true;
+        if (ctor.includes("dropdown")) return true;
+
+        // Portal側のカスタムselection fieldを広めに許容。
+        if (/selection|list|item|enum|type/.test(name)) return true;
+        if (/dropdown|select|selection|enum/.test(ctor)) return true;
+        if (text && options.includes(text) && options.length >= 2) return true;
+
+        return false;
+    }
+
+    function extractSelectionItems(block) {
+        const result = [];
+        const seen = new Set();
+        if (!block) return result;
+
+        const fields = getAllFields(block);
+        const fieldResults = [];
+
+        for (const field of fields) {
+            const options = getFieldOptions(field);
+            if (!isLikelySelectionField(field, options)) continue;
+            if (!options.length) continue;
+            fieldResults.push({ field, options });
+        }
+
+        // まず VALUE-1 / Dropdown 系を優先。
+        fieldResults.sort((a, b) => {
+            const an = normalize(a.field?.name).toLowerCase();
+            const bn = normalize(b.field?.name).toLowerCase();
+            const ap = an === "value-1" || normalize(a.field?.constructor?.name).toLowerCase().includes("dropdown") ? 0 : 1;
+            const bp = bn === "value-1" || normalize(b.field?.constructor?.name).toLowerCase().includes("dropdown") ? 0 : 1;
+            return ap - bp;
+        });
+
+        for (const entry of fieldResults) {
+            for (const option of entry.options) addUnique(result, seen, option);
+        }
+
+        return result;
+    }
+
+    function downloadSelectionList() {
+        const block = lastContextBlock || getBlockFromId(lastContextBlockId);
+        const ja = getPortalLanguage() === "ja";
+
+        if (!block) {
+            alert(ja ? "右クリックしたブロックを取得できませんでした。" : "Could not get the context block.");
+            return;
+        }
+
+        const names = extractSelectionItems(block);
+        if (!names.length) {
+            alert(ja
+                ? "このブロックから選択リストの候補を取得できませんでした。"
+                : "No selection-list options could be found on this block.");
+            return;
+        }
+
+        const text = names.join("\n") + "\n";
+        const blob = new Blob(["\uFEFF" + text], { type: "text/plain;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "Selection_List.txt";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
+    function addSelectionListItem(submenu) {
+        if (!submenu || !submenu.isConnected) return;
+        if (submenu.querySelector('[data-selection-list-plugin="1"]')) return;
+
+        const item = document.createElement("div");
+        item.className = "bf6-options-menu-item";
+        item.setAttribute("data-selection-list-plugin", "1");
+        Object.assign(item.style, {
+            padding: "5px 18px",
+            whiteSpace: "nowrap",
+            background: "rgb(22, 29, 30)",
+            color: "#ffffff",
+            cursor: "pointer",
+            fontSize: "15px",
+            lineHeight: "1.3",
+            borderTop: "1px solid #3a4648",
+            marginTop: "3px"
+        });
+
+        const label = document.createElement("span");
+        label.className = "bf6-options-menu-label";
+        label.textContent = "Selection List";
+        item.appendChild(label);
+
+        item.addEventListener("mouseenter", () => item.style.background = "rgb(48, 60, 62)");
+        item.addEventListener("mouseleave", () => item.style.background = "rgb(22, 29, 30)");
+        item.addEventListener("click", event => {
+            event.preventDefault();
+            event.stopPropagation();
+            event.stopImmediatePropagation?.();
+            downloadSelectionList();
+        }, true);
+
+        submenu.appendChild(item);
+    }
+
+    function scan() {
+        const submenus = document.querySelectorAll(".bf6-experience-manager-options-submenu");
+        for (const submenu of submenus) addSelectionListItem(submenu);
+    }
+
+    function startObserver() {
+        if (observer) return;
+        observer = new MutationObserver(() => scan());
+        observer.observe(document.documentElement || document.body, { childList: true, subtree: true });
+        scan();
+    }
+
+    document.addEventListener("contextmenu", event => {
+        try {
+            const target = event.target;
+            const blockEl = target?.closest?.("g.blocklyDraggable");
+            const id = blockEl?.getAttribute?.("data-id") || blockEl?.dataset?.id || null;
+            lastContextBlockId = id ? String(id) : null;
+            lastContextBlock = getBlockFromId(lastContextBlockId);
+            setTimeout(scan, 0);
+        } catch (_) {
+            lastContextBlockId = null;
+            lastContextBlock = null;
+        }
+    }, true);
+
+    plugin.initializeWorkspace = async function () {
+        startObserver();
+        scan();
+    };
 })();
