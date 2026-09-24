@@ -335,15 +335,6 @@
         const group = getFieldText(block, "VALUE-0");
         const chunks = [];
         const total = names.length;
-        const showProgress = total > 0;
-        let progressBar = null;
-
-        if (showProgress) {
-            progressBar = createLoadingStatus(total);
-            updateLoadingStatus(progressBar, 0, total);
-            // Let the browser paint the status bar before the heavy JSON build.
-            await yieldToUI();
-        }
 
         let processed = 0;
         for (let offset = 0, chunkIndex = 0; offset < names.length; offset += MAX_ITEMS_PER_ARRAY, chunkIndex++) {
@@ -412,10 +403,6 @@
                 sourceIds.push(setId);
                 previousId = setId;
                 processed++;
-                if (progressBar && (processed % 16 === 0 || processed === total)) {
-                    updateLoadingStatus(progressBar, processed, total);
-                    await yieldToUI();
-                }
             }
 
             const subroutineNumber = chunkIndex + 1;
@@ -452,11 +439,6 @@
             });
         }
 
-        if (progressBar) {
-            updateLoadingStatus(progressBar, total, total);
-            await yieldToUI();
-            removeLoadingStatus(progressBar);
-        }
         const blocks = chunks.flatMap(c => c.blocks);
         const sourceIds = chunks.flatMap(c => c.sourceIds);
         const connections = chunks.flatMap(c => c.connections);
@@ -674,7 +656,7 @@
         return data[0].map(part => Array.isArray(part) ? String(part[0] || "") : "").join("");
     }
 
-    async function translateNames(names) {
+    async function translateNames(names, progressBar = null) {
         const unique = [...new Set(names.map(normalize).filter(Boolean))];
         const translated = new Map();
         const cacheKey = "selectionListTranslationCache_v1";
@@ -703,6 +685,13 @@
         }
         if (batch.length) batches.push(batch);
 
+        const progressTotal = pending.length;
+        let progressDone = 0;
+        if (progressBar) {
+            updateLoadingStatus(progressBar, 0, progressTotal);
+            await yieldToUI();
+        }
+
         const translateOneBatch = async sourceBatch => {
             const source = sourceBatch.join("\n");
             try {
@@ -714,6 +703,8 @@
                         translated.set(name, value || name);
                         cache[name] = value || name;
                     });
+                    progressDone += sourceBatch.length;
+                    if (progressBar) { updateLoadingStatus(progressBar, progressDone, progressTotal); await yieldToUI(); }
                     return;
                 }
             } catch (_) {}
@@ -729,6 +720,8 @@
                     translated.set(name, name);
                     cache[name] = name;
                 }
+                progressDone++;
+                if (progressBar) { updateLoadingStatus(progressBar, progressDone, progressTotal); await yieldToUI(); }
             }
         };
 
@@ -778,7 +771,10 @@
     }
 
     async function createJapaneseTextArray(block, names) {
-        const translated = await translateNames(names);
+        const progressBar = names.length > 256 ? createLoadingStatus(names.length) : null;
+        if (progressBar) updateLoadingStatus(progressBar, 0, names.length);
+        const translated = await translateNames(names, progressBar);
+        if (progressBar) { updateLoadingStatus(progressBar, names.length, names.length); await yieldToUI(); removeLoadingStatus(progressBar); }
         const MAX_ITEMS_PER_ARRAY = 256;
         const pos = getBlockPosition(block);
         const x = Number(pos.x.toFixed(6));
@@ -884,7 +880,10 @@
     }
 
     async function exportTranslatedTextFile(block, names) {
-        const translated = await translateNames(names);
+        const progressBar = names.length > 256 ? createLoadingStatus(names.length) : null;
+        if (progressBar) updateLoadingStatus(progressBar, 0, names.length);
+        const translated = await translateNames(names, progressBar);
+        if (progressBar) { updateLoadingStatus(progressBar, names.length, names.length); await yieldToUI(); removeLoadingStatus(progressBar); }
         const group = getFieldText(block, "VALUE-0") || getBaseVariableName(block);
         const filename = `${group}_list_EJ.txt`;
         const text = names.map((name, i) => `${name},${translated[i] || name}`).join("\r\n") + "\r\n";
