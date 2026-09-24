@@ -1,8 +1,8 @@
 {
-  "id": "Block_Catalog",
-  "name": "Block_Catalog",
+  "id": "Selection_List",
+  "name": "Selection_List",
   "version": "1.0.0",
-  "description": "Export BF2042 Portal block definitions to a text file",
+  "description": "Export Selection List item names from BF2042 Portal to a text file",
   "author": "reni2",
   "main": "index.js"
 }
