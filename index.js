@@ -247,82 +247,158 @@
         return "";
     }
 
+    function getToolboxItemsRecursive(items, out = []) {
+        if (!Array.isArray(items)) return out;
+        for (const item of items) {
+            if (!item) continue;
+            out.push(item);
+            try {
+                const children = typeof item.getToolboxItems === "function"
+                    ? item.getToolboxItems()
+                    : (typeof item.getContents === "function" ? item.getContents() : item.contents_);
+                if (Array.isArray(children)) getToolboxItemsRecursive(children, out);
+            } catch (_) {}
+        }
+        return out;
+    }
+
+    function getToolboxItemName(item) {
+        try {
+            if (typeof item.getName === "function") return normalizeText(item.getName());
+        } catch (_) {}
+        return normalizeText(item.name || item.label || item.displayName || item.categoryName || item.category);
+    }
+
+    function getToolboxItemContents(item) {
+        try {
+            if (typeof item.getContents === "function") {
+                const value = item.getContents();
+                if (Array.isArray(value)) return value;
+            }
+        } catch (_) {}
+        for (const key of ["contents_", "contents", "blocks", "items"]) {
+            try {
+                if (Array.isArray(item[key])) return item[key];
+            } catch (_) {}
+        }
+        return [];
+    }
+
+    function getToolboxCategory() {
+        try {
+            const ws = _Blockly?.getMainWorkspace?.();
+            const toolbox = ws?.getToolbox?.();
+            if (!toolbox) return null;
+            const roots = typeof toolbox.getToolboxItems === "function"
+                ? toolbox.getToolboxItems()
+                : (toolbox.contents_ || []);
+            const all = getToolboxItemsRecursive(roots, []);
+            return all.find(item => /SELECTION\s*LISTS/i.test(getToolboxItemName(item))) || null;
+        } catch (_) {
+            return null;
+        }
+    }
+
+    function getDefinitionValue(obj, fieldName) {
+        if (!obj || typeof obj !== "object") return "";
+        if (obj.fields && typeof obj.fields === "object" && !Array.isArray(obj.fields)) {
+            const direct = normalizeText(obj.fields[fieldName]);
+            if (direct) return direct;
+        }
+        for (const container of [obj.fields, obj.args0, obj.inputs, obj.inputList]) {
+            if (!container) continue;
+            if (Array.isArray(container)) {
+                for (const item of container) {
+                    if (!item || typeof item !== "object") continue;
+                    const name = normalizeText(item.name || item.field || item.fieldName);
+                    if (name !== fieldName) continue;
+                    for (const key of ["value", "text", "default", "value_", "text_"]) {
+                        const v = normalizeText(item[key]);
+                        if (v) return v;
+                    }
+                }
+            }
+        }
+        return "";
+    }
+
+    function getToolboxBlockType(obj) {
+        if (!obj || typeof obj !== "object") return "";
+        try {
+            if (typeof obj.getField === "function") return normalizeText(obj.type);
+        } catch (_) {}
+        return normalizeText(obj.type || obj.blockType);
+    }
+
+    function collectFromToolboxCategory(block, result, seen) {
+        const category = getToolboxCategory();
+        if (!category) return false;
+
+        const selectedType = normalizeText(block?.type);
+        const selectedListName = getSelectionListName(block);
+        const contents = getToolboxItemContents(category);
+        let matched = false;
+
+        for (const entry of contents) {
+            if (!entry || typeof entry !== "object") continue;
+            const type = getToolboxBlockType(entry);
+            const v0 = getDefinitionValue(entry, "VALUE-0");
+            const v1 = getDefinitionValue(entry, "VALUE-1");
+
+            // 「選択リスト」カテゴリ内の同じブロック型を優先。
+            // VALUE-0 が取れる場合は、右クリックしたブロックと同じ
+            // 選択リスト名の項目だけを集める。
+            if (selectedType && type && type !== selectedType) continue;
+            if (selectedListName && v0 && v0 !== selectedListName) continue;
+            if (v1) {
+                addCandidateValue(result, seen, v1);
+                matched = true;
+            }
+        }
+
+        return matched;
+    }
+
     function extractSelectionItemNames(block) {
         const result = [];
         const seen = new Set();
-        const listName = getSelectionListName(block);
-        const selectedType = normalizeText(block?.type);
-        if (!listName && !selectedType) return result;
+        if (!block) return result;
 
-        const add = value => addCandidateValue(result, seen, value);
-        const definitions = getBlockDefinitions();
+        // 最優先: PORTAL本体の左側ツールボックスにある
+        // 「SELECTION LISTS」カテゴリそのものを調べる。
+        collectFromToolboxCategory(block, result, seen);
 
-        // PORTALのToolboxに登録されている「選択リスト」の全定義を対象にする。
-        // 右クリックしたブロック自身の type (例: SoldierStateBoolItem) だけを
-        // 探すのではなく、実際のリスト名 (例: SoldierStateBool) を基準に、
-        // definitions 全体から VALUE-0 / VALUE-1 の組を収集する。
-        if (definitions != null) {
-            walkDefinitions(definitions, (obj, path) => {
-                if (!obj || typeof obj !== "object" || Array.isArray(obj)) return;
-
-                const fields = obj.fields && typeof obj.fields === "object" && !Array.isArray(obj.fields)
-                    ? obj.fields : null;
-
-                // もっとも重要な形式:
-                // { type: "SoldierStateBoolItem", fields: {
-                //   "VALUE-0": "SoldierStateBool",
-                //   "VALUE-1": "IsAISoldier"
-                // }}
-                if (fields) {
-                    const v0 = normalizeText(fields["VALUE-0"]);
-                    const v1 = normalizeText(fields["VALUE-1"]);
-                    if (listName && v0 === listName && v1) add(v1);
-                }
-
-                // Blockly JSON の args0 / inputList 等に VALUE-0 / VALUE-1 が
-                // 配列形式で入っているケースにも対応。
-                const containers = [obj.args0, obj.inputs, obj.inputList];
-                for (const container of containers) {
-                    if (!Array.isArray(container)) continue;
-                    let v0 = "";
-                    let v1 = "";
-                    for (const item of container) {
-                        if (!item || typeof item !== "object") continue;
-                        const name = normalizeText(item.name || item.field || item.fieldName);
-                        if (name === "VALUE-0") {
-                            v0 = normalizeText(item.value || item.text || item.default);
-                        } else if (name === "VALUE-1") {
-                            v1 = normalizeText(item.value || item.text || item.default);
-                        }
-                    }
-                    if (listName && v0 === listName && v1) add(v1);
-                }
-
-                // 定義のキー自身がリスト名になっている形式にも対応する。
-                // 例: { SoldierStateBool: { ...options... } }
-                const pathKey = path && path.length ? normalizeText(path[path.length - 1]) : "";
-                const objName = normalizeText(
-                    obj.name || obj.displayName || obj.label || obj.blockName || obj.menuName
-                );
-                if (listName && (pathKey === listName || objName === listName)) {
-                    // このノード配下にある VALUE-1 を持つ項目を再帰走査するため、
-                    // ここでは直接の fields だけでなく下位ノードも visitor で拾う。
-                    if (fields) add(fields["VALUE-1"]);
-                }
-            });
+        // カテゴリ内部の表現がBlocklyのバージョンによって異なる場合に備え、
+        // Frostbite Block Definitions も補完として利用する。
+        if (!result.length) {
+            const definitions = getBlockDefinitions();
+            const listName = getSelectionListName(block);
+            const selectedType = normalizeText(block.type);
+            if (definitions != null) {
+                walkDefinitions(definitions, obj => {
+                    if (!obj || typeof obj !== "object" || Array.isArray(obj)) return;
+                    const type = definitionType(obj);
+                    if (selectedType && type && type !== selectedType) return;
+                    const v0 = getDefinitionValue(obj, "VALUE-0");
+                    const v1 = getDefinitionValue(obj, "VALUE-1");
+                    if (listName && v0 && v0 !== listName) return;
+                    if (v1) addCandidateValue(result, seen, v1);
+                });
+            }
         }
 
-        // definitions の形式によっては「項目定義」が保持されず、現在の
-        // ワークスペースに展開されたブロックからしか取れない場合がある。
-        // その場合は同じ VALUE-0 のものを全件補完する。
-        const ws = block.workspace || _Blockly?.getMainWorkspace?.();
-        const blocks = ws?.getAllBlocks?.(false) || [];
-        for (const candidate of blocks) {
-            if (!candidate) continue;
-            const candidateListName = getSelectionListName(candidate);
-            if (listName && candidateListName !== listName) continue;
-            const itemName = getSelectionItemName(candidate);
-            if (itemName) add(itemName);
+        // 最後の補完: 現在ワークスペースに存在する同種ブロック。
+        if (!result.length) {
+            const listName = getSelectionListName(block);
+            const selectedType = normalizeText(block.type);
+            const ws = block.workspace || _Blockly?.getMainWorkspace?.();
+            for (const candidate of ws?.getAllBlocks?.(false) || []) {
+                if (!candidate) continue;
+                if (selectedType && normalizeText(candidate.type) !== selectedType) continue;
+                const candidateListName = getSelectionListName(candidate);
+                if (listName && candidateListName && candidateListName !== listName) continue;
+                addCandidateValue(result, seen, getSelectionItemName(candidate));
+            }
         }
 
         return result;
