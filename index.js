@@ -250,36 +250,79 @@
     function extractSelectionItemNames(block) {
         const result = [];
         const seen = new Set();
+        const listName = getSelectionListName(block);
         const selectedType = normalizeText(block?.type);
-        if (!selectedType) return result;
+        if (!listName && !selectedType) return result;
 
+        const add = value => addCandidateValue(result, seen, value);
         const definitions = getBlockDefinitions();
 
-        // まずPORTAL本体が保持している Frostbite Block Definitions を検索する。
-        // ワークスペース上の「今ある1個」ではなく、Toolboxに登録されている
-        // 同一ブロック定義をすべて対象にするのがポイント。
+        // PORTALのToolboxに登録されている「選択リスト」の全定義を対象にする。
+        // 右クリックしたブロック自身の type (例: SoldierStateBoolItem) だけを
+        // 探すのではなく、実際のリスト名 (例: SoldierStateBool) を基準に、
+        // definitions 全体から VALUE-0 / VALUE-1 の組を収集する。
         if (definitions != null) {
-            walkDefinitions(definitions, (def) => {
-                const type = definitionType(def);
-                if (type !== selectedType) return;
+            walkDefinitions(definitions, (obj, path) => {
+                if (!obj || typeof obj !== "object" || Array.isArray(obj)) return;
 
-                // 選択リストカテゴリ由来の定義を優先。
-                // category情報が無い形式もあるため、type一致なら候補として扱う。
-                const category = categoryText(def);
-                if (category && !isSelectionCategory(category)) return;
-                collectDefinitionFields(def, result, seen);
+                const fields = obj.fields && typeof obj.fields === "object" && !Array.isArray(obj.fields)
+                    ? obj.fields : null;
+
+                // もっとも重要な形式:
+                // { type: "SoldierStateBoolItem", fields: {
+                //   "VALUE-0": "SoldierStateBool",
+                //   "VALUE-1": "IsAISoldier"
+                // }}
+                if (fields) {
+                    const v0 = normalizeText(fields["VALUE-0"]);
+                    const v1 = normalizeText(fields["VALUE-1"]);
+                    if (listName && v0 === listName && v1) add(v1);
+                }
+
+                // Blockly JSON の args0 / inputList 等に VALUE-0 / VALUE-1 が
+                // 配列形式で入っているケースにも対応。
+                const containers = [obj.args0, obj.inputs, obj.inputList];
+                for (const container of containers) {
+                    if (!Array.isArray(container)) continue;
+                    let v0 = "";
+                    let v1 = "";
+                    for (const item of container) {
+                        if (!item || typeof item !== "object") continue;
+                        const name = normalizeText(item.name || item.field || item.fieldName);
+                        if (name === "VALUE-0") {
+                            v0 = normalizeText(item.value || item.text || item.default);
+                        } else if (name === "VALUE-1") {
+                            v1 = normalizeText(item.value || item.text || item.default);
+                        }
+                    }
+                    if (listName && v0 === listName && v1) add(v1);
+                }
+
+                // 定義のキー自身がリスト名になっている形式にも対応する。
+                // 例: { SoldierStateBool: { ...options... } }
+                const pathKey = path && path.length ? normalizeText(path[path.length - 1]) : "";
+                const objName = normalizeText(
+                    obj.name || obj.displayName || obj.label || obj.blockName || obj.menuName
+                );
+                if (listName && (pathKey === listName || objName === listName)) {
+                    // このノード配下にある VALUE-1 を持つ項目を再帰走査するため、
+                    // ここでは直接の fields だけでなく下位ノードも visitor で拾う。
+                    if (fields) add(fields["VALUE-1"]);
+                }
             });
         }
 
-        // もし定義データにcategory情報が無い場合、Toolbox上の選択リストカテゴリを
-        //確認できれば、type一致の定義結果をそのまま採用する。
-        // さらに、定義側の形式が特殊だった場合に備えて、ワークスペース上の同型ブロックも補完する。
+        // definitions の形式によっては「項目定義」が保持されず、現在の
+        // ワークスペースに展開されたブロックからしか取れない場合がある。
+        // その場合は同じ VALUE-0 のものを全件補完する。
         const ws = block.workspace || _Blockly?.getMainWorkspace?.();
         const blocks = ws?.getAllBlocks?.(false) || [];
         for (const candidate of blocks) {
-            if (!candidate || normalizeText(candidate.type) !== selectedType) continue;
+            if (!candidate) continue;
+            const candidateListName = getSelectionListName(candidate);
+            if (listName && candidateListName !== listName) continue;
             const itemName = getSelectionItemName(candidate);
-            if (itemName) addCandidateValue(result, seen, itemName);
+            if (itemName) add(itemName);
         }
 
         return result;
