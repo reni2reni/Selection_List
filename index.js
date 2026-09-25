@@ -918,13 +918,27 @@
 
         const panel = document.createElement("div");
         panel.setAttribute("data-selection-list-plugin", "jlist-panel");
+        const JLIST_LAYOUT_KEY = "selection_list_jlistselect_layout_v1";
+        let savedLayout = null;
+        try { savedLayout = JSON.parse(localStorage.getItem(JLIST_LAYOUT_KEY) || "null"); } catch (_) {}
+        const defaultWidth = Math.max(420, Math.round(window.innerWidth * 0.5));
+        const defaultHeight = Math.max(300, window.innerHeight - 24);
+        const initialWidth = Number.isFinite(savedLayout?.width) ? Math.max(420, Math.min(savedLayout.width, window.innerWidth - 8)) : defaultWidth;
+        const initialHeight = Number.isFinite(savedLayout?.height) ? Math.max(300, Math.min(savedLayout.height, window.innerHeight - 8)) : defaultHeight;
+        const initialLeft = Number.isFinite(savedLayout?.left) ? Math.max(0, Math.min(savedLayout.left, window.innerWidth - initialWidth)) : Math.round((window.innerWidth - initialWidth) / 2);
+        const initialTop = Number.isFinite(savedLayout?.top) ? Math.max(0, Math.min(savedLayout.top, window.innerHeight - initialHeight)) : 0;
         Object.assign(panel.style, {
-            width: "calc(100vw - 12px)", height: "calc(100vh - 24px)", maxWidth: "none", maxHeight: "none",
+            width: `${initialWidth}px`, height: `${initialHeight}px`, maxWidth: "none", maxHeight: "none",
+            left: `${initialLeft}px`, top: `${initialTop}px`,
             display: "flex", flexDirection: "column", boxSizing: "border-box",
             background: "#15191b", color: "#f2f2f2",
-            borderLeft: "1px solid #3a4648", borderRight: "1px solid #3a4648",
-            boxShadow: "0 0 28px rgba(0,0,0,.65)", overflow: "hidden", fontFamily: "Arial, sans-serif", position: "relative", margin: "0 auto 24px"
+            border: "1px solid #3a4648",
+            boxShadow: "0 0 28px rgba(0,0,0,.65)", overflow: "hidden", fontFamily: "Arial, sans-serif", position: "fixed", margin: "0"
         });
+        const saveLayout = () => {
+            const r = panel.getBoundingClientRect();
+            try { localStorage.setItem(JLIST_LAYOUT_KEY, JSON.stringify({ left: Math.round(r.left), top: Math.round(r.top), width: Math.round(r.width), height: Math.round(r.height) })); } catch (_) {}
+        };
 
         const header = document.createElement("div");
         Object.assign(header.style, { flex: "0 0 auto", padding: "12px 16px 10px", borderBottom: "1px solid #394447", background: "#1d2426" });
@@ -1080,7 +1094,7 @@
             event.preventDefault();
         };
         const moveDrag = event => { if (dragging) { panel.style.left = `${panelStartX + event.clientX - dragStartX}px`; panel.style.top = `${panelStartY + event.clientY - dragStartY}px`; } };
-        const endDrag = () => { dragging = false; };
+        const endDrag = () => { if (dragging) saveLayout(); dragging = false; };
         titleRow.addEventListener("mousedown", startDrag);
         document.addEventListener("mousemove", moveDrag, true); document.addEventListener("mouseup", endDrag, true);
 
@@ -1094,7 +1108,7 @@
             event.preventDefault(); event.stopPropagation();
         };
         const moveResize = event => { if (resizing) { panel.style.width = `${Math.max(420, resizeStartW + event.clientX - resizeStartX)}px`; panel.style.height = `${Math.max(300, resizeStartH + event.clientY - resizeStartY)}px`; } };
-        const endResize = () => { resizing = false; };
+        const endResize = () => { if (resizing) saveLayout(); resizing = false; };
         resizeHandle.addEventListener("mousedown", startResize);
         document.addEventListener("mousemove", moveResize, true); document.addEventListener("mouseup", endResize, true);
 
