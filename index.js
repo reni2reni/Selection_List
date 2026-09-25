@@ -911,81 +911,61 @@
         const overlay = document.createElement("div");
         overlay.setAttribute("data-selection-list-plugin", "jlist-overlay");
         Object.assign(overlay.style, {
-            position: "fixed",
-            inset: "0",
-            zIndex: "2147483646",
-            background: "rgba(0,0,0,.48)",
-            display: "flex",
-            alignItems: "stretch",
-            justifyContent: "center",
-            padding: "0",
-            boxSizing: "border-box"
+            position: "fixed", inset: "0", zIndex: "2147483646",
+            background: "rgba(0,0,0,.48)", display: "flex",
+            alignItems: "stretch", justifyContent: "center", padding: "0", boxSizing: "border-box"
         });
 
         const panel = document.createElement("div");
         panel.setAttribute("data-selection-list-plugin", "jlist-panel");
         Object.assign(panel.style, {
-            width: "100vw",
-            height: "100vh",
-            maxWidth: "100vw",
-            maxHeight: "100vh",
-            display: "flex",
-            flexDirection: "column",
-            boxSizing: "border-box",
-            background: "#15191b",
-            color: "#f2f2f2",
-            borderLeft: "1px solid #3a4648",
-            borderRight: "1px solid #3a4648",
-            boxShadow: "0 0 28px rgba(0,0,0,.65)",
-            overflow: "hidden",
-            fontFamily: "Arial, sans-serif"
+            width: "100vw", height: "100vh", maxWidth: "100vw", maxHeight: "100vh",
+            display: "flex", flexDirection: "column", boxSizing: "border-box",
+            background: "#15191b", color: "#f2f2f2",
+            borderLeft: "1px solid #3a4648", borderRight: "1px solid #3a4648",
+            boxShadow: "0 0 28px rgba(0,0,0,.65)", overflow: "hidden", fontFamily: "Arial, sans-serif"
         });
 
         const header = document.createElement("div");
-        Object.assign(header.style, {
-            flex: "0 0 auto",
-            padding: "12px 16px 10px",
-            borderBottom: "1px solid #394447",
-            background: "#1d2426"
-        });
+        Object.assign(header.style, { flex: "0 0 auto", padding: "12px 16px 10px", borderBottom: "1px solid #394447", background: "#1d2426" });
 
         const titleRow = document.createElement("div");
         Object.assign(titleRow.style, { display: "flex", alignItems: "center", gap: "10px", marginBottom: "9px" });
         const title = document.createElement("div");
         title.textContent = "List → JlistSelect";
         Object.assign(title.style, { fontSize: "18px", fontWeight: "700", flex: "1", cursor: "move", userSelect: "none" });
+
+        const displayButton = document.createElement("button");
+        displayButton.type = "button";
+        Object.assign(displayButton.style, {
+            flex: "0 0 auto", height: "30px", padding: "0 11px", border: "1px solid #4a595c",
+            borderRadius: "4px", background: "#20282a", color: "#d7dddd", fontSize: "12px",
+            cursor: "pointer", whiteSpace: "nowrap"
+        });
+
         const countLabel = document.createElement("div");
         Object.assign(countLabel.style, { fontSize: "12px", color: "#aab6b9" });
         const closeButton = document.createElement("button");
         closeButton.type = "button";
         closeButton.textContent = "✕";
         Object.assign(closeButton.style, {
-            flex: "0 0 auto", width: "32px", height: "30px", padding: "0",
-            border: "1px solid #4a595c", borderRadius: "4px",
-            background: "#20282a", color: "#d7dddd", fontSize: "17px",
-            lineHeight: "28px", cursor: "pointer"
+            flex: "0 0 auto", width: "32px", height: "30px", padding: "0", border: "1px solid #4a595c",
+            borderRadius: "4px", background: "#20282a", color: "#d7dddd", fontSize: "17px", lineHeight: "28px", cursor: "pointer"
         });
-        closeButton.title = "閉じる";
+        closeButton.title = "Close";
         closeButton.addEventListener("mouseenter", () => closeButton.style.background = "#3a2424");
         closeButton.addEventListener("mouseleave", () => closeButton.style.background = "#20282a");
         closeButton.addEventListener("click", () => removeJListSelectPanel());
         titleRow.appendChild(title);
+        titleRow.appendChild(displayButton);
         titleRow.appendChild(countLabel);
         titleRow.appendChild(closeButton);
 
         const search = document.createElement("input");
         search.type = "search";
-        search.placeholder = "日本語 / 元のリスト名を検索…";
         Object.assign(search.style, {
-            width: "100%",
-            boxSizing: "border-box",
-            padding: "9px 11px",
-            border: "1px solid #4a595c",
-            borderRadius: "3px",
-            outline: "none",
-            background: "#0e1213",
-            color: "#fff",
-            fontSize: "15px"
+            width: "100%", boxSizing: "border-box", padding: "9px 11px", border: "1px solid #4a595c",
+            borderRadius: "3px", outline: "none", background: "#0e1213", color: "#fff", fontSize: "15px"
         });
         search.addEventListener("focus", () => search.style.borderColor = "#789096");
         search.addEventListener("blur", () => search.style.borderColor = "#4a595c");
@@ -993,26 +973,74 @@
         header.appendChild(search);
 
         const list = document.createElement("div");
-        Object.assign(list.style, {
-            flex: "1 1 auto",
-            minHeight: "0",
-            overflowY: "auto",
-            overflowX: "hidden",
-            padding: "4px 0 24px",
-            background: "#111516"
-        });
-
+        Object.assign(list.style, { flex: "1 1 auto", minHeight: "0", overflowY: "auto", overflowX: "hidden", padding: "4px 0 24px", background: "#111516" });
         const empty = document.createElement("div");
-        empty.textContent = "該当するリスト項目がありません。";
+        empty.textContent = "No matching list items.";
         Object.assign(empty.style, { padding: "24px 18px", color: "#9da9ac", display: "none" });
         list.appendChild(empty);
 
-        const sorted = sortJapaneseListPairs(pairs);
-        countLabel.textContent = `${sorted.length} 件`;
-
         const rows = [];
-        const render = () => {
-            const q = normalize(search.value).toLocaleLowerCase("ja");
+        let displayMode = "ja"; // ja -> en -> both
+        const sortedPairs = () => {
+            const copy = [...pairs];
+            if (displayMode === "en") {
+                return copy.sort((a, b) => normalize(a.original || a.display).localeCompare(normalize(b.original || b.display), "en", { numeric: true, sensitivity: "base" }));
+            }
+            if (displayMode === "both") {
+                return copy.sort((a, b) => {
+                    const aa = normalize(a.japanese || a.original || a.display);
+                    const bb = normalize(b.japanese || b.original || b.display);
+                    const aLatin = /^[A-Za-z0-9]/.test(aa), bLatin = /^[A-Za-z0-9]/.test(bb);
+                    if (aLatin !== bLatin) return aLatin ? -1 : 1;
+                    return aa.localeCompare(bb, "ja", { numeric: true, sensitivity: "base" });
+                });
+            }
+            return copy.sort((a, b) => {
+                const aa = normalize(a.japanese || a.original || a.display);
+                const bb = normalize(b.japanese || b.original || b.display);
+                const aLatin = /^[A-Za-z0-9]/.test(aa), bLatin = /^[A-Za-z0-9]/.test(bb);
+                if (aLatin !== bLatin) return aLatin ? -1 : 1;
+                return aa.localeCompare(bb, "ja", { numeric: true, sensitivity: "base" });
+            });
+        };
+
+        const modeLabels = { ja: "Display: Japanese", en: "Display: English", both: "Display: Both" };
+        const modePlaceholders = { ja: "Search Japanese / original name…", en: "Search original name…", both: "Search Japanese / original name…" };
+        const updateDisplay = () => {
+            displayButton.textContent = modeLabels[displayMode];
+            search.placeholder = modePlaceholders[displayMode];
+            const q = normalize(search.value).toLocaleLowerCase(displayMode === "en" ? "en" : "ja");
+            const sorted = sortedPairs();
+            rows.forEach(row => row.el.remove());
+            rows.length = 0;
+            for (const pair of sorted) {
+                const original = normalize(pair.original || pair.display);
+                const japanese = normalize(pair.japanese || original);
+                const row = document.createElement("div");
+                Object.assign(row.style, { display: "flex", alignItems: "center", minHeight: "42px", padding: "7px 16px", boxSizing: "border-box", borderBottom: "1px solid #273032", cursor: "pointer", gap: "14px" });
+                const jp = document.createElement("div");
+                jp.textContent = japanese;
+                Object.assign(jp.style, { flex: "0 0 42%", minWidth: "0", fontSize: "15px", fontWeight: "600", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: displayMode === "en" ? "none" : "block" });
+                const en = document.createElement("div");
+                en.textContent = original;
+                Object.assign(en.style, { flex: displayMode === "ja" ? "1 1 auto" : "1 1 auto", minWidth: "0", fontSize: displayMode === "both" ? "13px" : "15px", color: displayMode === "ja" ? "#9eabad" : "#f2f2f2", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" });
+                row.appendChild(jp); row.appendChild(en);
+                row.addEventListener("mouseenter", () => row.style.background = "#263235");
+                row.addEventListener("mouseleave", () => row.style.background = "transparent");
+                row.addEventListener("click", async () => {
+                    const payload = buildJListSelectBlock(block, original);
+                    const ok = await copyToClipboard(JSON.stringify(payload, null, 2));
+                    if (ok) {
+                        row.style.background = "#345047";
+                        setTimeout(() => { if (row.isConnected) row.style.background = "transparent"; }, 180);
+                    } else {
+                        alert(getPortalLanguage() === "ja" ? "クリップボードへのコピーに失敗しました。" : "Failed to copy to clipboard.");
+                    }
+                });
+                list.appendChild(row);
+                const searchText = displayMode === "en" ? original : `${japanese} ${original}`;
+                rows.push({ el: row, searchText: searchText.toLocaleLowerCase(displayMode === "en" ? "en" : "ja") });
+            }
             let visible = 0;
             for (const row of rows) {
                 const hit = !q || row.searchText.includes(q);
@@ -1020,138 +1048,61 @@
                 if (hit) visible++;
             }
             empty.style.display = visible ? "none" : "block";
+            countLabel.textContent = `${sorted.length} items`;
         };
 
-        sorted.forEach((pair, index) => {
-            const original = normalize(pair.original || pair.display);
-            const japanese = normalize(pair.japanese || original);
-            const row = document.createElement("div");
-            Object.assign(row.style, {
-                display: "flex",
-                alignItems: "center",
-                minHeight: "42px",
-                padding: "7px 16px",
-                boxSizing: "border-box",
-                borderBottom: "1px solid #273032",
-                cursor: "pointer",
-                gap: "14px"
-            });
-
-            const jp = document.createElement("div");
-            jp.textContent = japanese;
-            Object.assign(jp.style, {
-                flex: "0 0 42%",
-                minWidth: "0",
-                fontSize: "15px",
-                fontWeight: "600",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap"
-            });
-
-            const en = document.createElement("div");
-            en.textContent = original;
-            Object.assign(en.style, {
-                flex: "1 1 auto",
-                minWidth: "0",
-                fontSize: "13px",
-                color: "#9eabad",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap"
-            });
-
-            row.appendChild(jp);
-            row.appendChild(en);
-            row.addEventListener("mouseenter", () => row.style.background = "#263235");
-            row.addEventListener("mouseleave", () => row.style.background = "transparent");
-            row.addEventListener("click", async () => {
-                const payload = buildJListSelectBlock(block, original);
-                const ok = await copyToClipboard(JSON.stringify(payload, null, 2));
-                if (ok) {
-                    row.style.background = "#345047";
-                    setTimeout(() => { if (row.isConnected) row.style.background = "transparent"; }, 180);
-                } else {
-                    alert(getPortalLanguage() === "ja" ? "クリップボードへのコピーに失敗しました。" : "Failed to copy to clipboard.");
-                }
-            });
-
-            list.appendChild(row);
-            rows.push({ el: row, searchText: `${japanese} ${original}`.toLocaleLowerCase("ja") });
+        displayButton.addEventListener("mouseenter", () => displayButton.style.background = "#303b3d");
+        displayButton.addEventListener("mouseleave", () => displayButton.style.background = "#20282a");
+        displayButton.addEventListener("click", () => {
+            displayMode = displayMode === "ja" ? "en" : displayMode === "en" ? "both" : "ja";
+            updateDisplay();
+            search.focus();
         });
+        search.addEventListener("input", updateDisplay);
 
         // Resize handle: bottom-right corner.
         const resizeHandle = document.createElement("div");
-        Object.assign(resizeHandle.style, {
-            position: "absolute", right: "0", bottom: "0", width: "22px", height: "22px",
-            cursor: "nwse-resize", zIndex: "5",
-            background: "linear-gradient(135deg, transparent 0 45%, #657477 46% 52%, transparent 53% 62%, #657477 63% 69%, transparent 70%)"
-        });
+        Object.assign(resizeHandle.style, { position: "absolute", right: "0", bottom: "0", width: "22px", height: "22px", cursor: "nwse-resize", zIndex: "5", background: "linear-gradient(135deg, transparent 0 45%, #657477 46% 52%, transparent 53% 62%, #657477 63% 69%, transparent 70%)" });
         panel.style.position = "relative";
         panel.appendChild(resizeHandle);
 
-        // Drag by the title bar. Keep the initially full-size window, but allow it to be moved.
-        let dragging = false;
-        let dragStartX = 0, dragStartY = 0, panelStartX = 0, panelStartY = 0;
+        let dragging = false, dragStartX = 0, dragStartY = 0, panelStartX = 0, panelStartY = 0;
         const startDrag = event => {
-            if (event.button !== 0 || event.target === closeButton) return;
+            if (event.button !== 0 || event.target === closeButton || event.target === displayButton) return;
             dragging = true;
             const rect = panel.getBoundingClientRect();
-            dragStartX = event.clientX; dragStartY = event.clientY;
-            panelStartX = rect.left; panelStartY = rect.top;
-            panel.style.position = "fixed";
-            panel.style.left = `${rect.left}px`; panel.style.top = `${rect.top}px`;
-            panel.style.margin = "0";
-            panel.style.width = `${rect.width}px`; panel.style.height = `${rect.height}px`;
-            panel.style.maxWidth = "none"; panel.style.maxHeight = "none";
+            dragStartX = event.clientX; dragStartY = event.clientY; panelStartX = rect.left; panelStartY = rect.top;
+            panel.style.position = "fixed"; panel.style.left = `${rect.left}px`; panel.style.top = `${rect.top}px`; panel.style.margin = "0";
+            panel.style.width = `${rect.width}px`; panel.style.height = `${rect.height}px`; panel.style.maxWidth = "none"; panel.style.maxHeight = "none";
             event.preventDefault();
         };
-        const moveDrag = event => {
-            if (!dragging) return;
-            panel.style.left = `${panelStartX + event.clientX - dragStartX}px`;
-            panel.style.top = `${panelStartY + event.clientY - dragStartY}px`;
-        };
+        const moveDrag = event => { if (dragging) { panel.style.left = `${panelStartX + event.clientX - dragStartX}px`; panel.style.top = `${panelStartY + event.clientY - dragStartY}px`; } };
         const endDrag = () => { dragging = false; };
         titleRow.addEventListener("mousedown", startDrag);
-        document.addEventListener("mousemove", moveDrag, true);
-        document.addEventListener("mouseup", endDrag, true);
+        document.addEventListener("mousemove", moveDrag, true); document.addEventListener("mouseup", endDrag, true);
 
-        let resizing = false;
-        let resizeStartX = 0, resizeStartY = 0, resizeStartW = 0, resizeStartH = 0;
+        let resizing = false, resizeStartX = 0, resizeStartY = 0, resizeStartW = 0, resizeStartH = 0;
         const startResize = event => {
             if (event.button !== 0) return;
-            resizing = true;
-            const rect = panel.getBoundingClientRect();
-            resizeStartX = event.clientX; resizeStartY = event.clientY;
-            resizeStartW = rect.width; resizeStartH = rect.height;
-            panel.style.position = "fixed";
-            panel.style.left = `${rect.left}px`; panel.style.top = `${rect.top}px`;
-            panel.style.margin = "0";
-            panel.style.width = `${rect.width}px`; panel.style.height = `${rect.height}px`;
-            panel.style.maxWidth = "none"; panel.style.maxHeight = "none";
+            resizing = true; const rect = panel.getBoundingClientRect();
+            resizeStartX = event.clientX; resizeStartY = event.clientY; resizeStartW = rect.width; resizeStartH = rect.height;
+            panel.style.position = "fixed"; panel.style.left = `${rect.left}px`; panel.style.top = `${rect.top}px`; panel.style.margin = "0";
+            panel.style.width = `${rect.width}px`; panel.style.height = `${rect.height}px`; panel.style.maxWidth = "none"; panel.style.maxHeight = "none";
             event.preventDefault(); event.stopPropagation();
         };
-        const moveResize = event => {
-            if (!resizing) return;
-            const w = Math.max(420, resizeStartW + event.clientX - resizeStartX);
-            const h = Math.max(260, resizeStartH + event.clientY - resizeStartY);
-            panel.style.width = `${w}px`; panel.style.height = `${h}px`;
-        };
+        const moveResize = event => { if (resizing) { panel.style.width = `${Math.max(420, resizeStartW + event.clientX - resizeStartX)}px`; panel.style.height = `${Math.max(260, resizeStartH + event.clientY - resizeStartY)}px`; } };
         const endResize = () => { resizing = false; };
         resizeHandle.addEventListener("mousedown", startResize);
-        document.addEventListener("mousemove", moveResize, true);
-        document.addEventListener("mouseup", endResize, true);
+        document.addEventListener("mousemove", moveResize, true); document.addEventListener("mouseup", endResize, true);
 
-        search.addEventListener("input", render);
         overlay._jlistCleanup = () => {
-            document.removeEventListener("mousemove", moveDrag, true);
-            document.removeEventListener("mouseup", endDrag, true);
-            document.removeEventListener("mousemove", moveResize, true);
-            document.removeEventListener("mouseup", endResize, true);
+            document.removeEventListener("mousemove", moveDrag, true); document.removeEventListener("mouseup", endDrag, true);
+            document.removeEventListener("mousemove", moveResize, true); document.removeEventListener("mouseup", endResize, true);
             document.removeEventListener("keydown", jListEscapeHandler, true);
         };
+        panel.appendChild(header); panel.appendChild(list); overlay.appendChild(panel); document.body.appendChild(overlay);
+        updateDisplay();
         search.focus();
-        render();
     }
 
     function jListEscapeHandler(event) {
