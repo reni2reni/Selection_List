@@ -1609,7 +1609,7 @@
                 async () => {
                     const data = getNamesOrAlert();
                     if (!data) return;
-                    await createTypeA(data.block, data.names, true);
+                    await createTypeA(data.block, data.names, false);
                     removeFloatingMenu();
                 },
                 async () => {
