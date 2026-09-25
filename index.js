@@ -947,8 +947,10 @@
         const titleRow = document.createElement("div");
         Object.assign(titleRow.style, { display: "flex", alignItems: "center", gap: "10px", marginBottom: "9px" });
         const title = document.createElement("div");
-        title.textContent = "List → JlistSelect";
-        Object.assign(title.style, { fontSize: "18px", fontWeight: "700", flex: "1", cursor: "move", userSelect: "none" });
+        const blockTypeName = normalize(block?.type || "");
+        title.textContent = blockTypeName ? `List → JlistSelect  |  ${blockTypeName}` : "List → JlistSelect";
+        title.title = blockTypeName || "List → JlistSelect";
+        Object.assign(title.style, { fontSize: "18px", fontWeight: "700", flex: "1", cursor: "move", userSelect: "none", minWidth: "0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" });
 
         const displayButton = document.createElement("button");
         displayButton.type = "button";
