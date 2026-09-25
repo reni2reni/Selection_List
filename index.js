@@ -880,6 +880,247 @@
         }
     }
 
+
+    function sortJapaneseListPairs(pairs) {
+        return [...pairs].sort((a, b) => {
+            const aa = normalize(a.japanese || a.original);
+            const bb = normalize(b.japanese || b.original);
+            const aLatin = /^[A-Za-z0-9]/.test(aa);
+            const bLatin = /^[A-Za-z0-9]/.test(bb);
+            if (aLatin !== bLatin) return aLatin ? -1 : 1;
+            return aa.localeCompare(bb, "ja", { numeric: true, sensitivity: "base" });
+        });
+    }
+
+    function buildJListSelectBlock(block, originalName) {
+        const type = normalize(block?.type);
+        const group = getFieldText(block, "VALUE-0") || type;
+        return {
+            type,
+            id: makeId("JList", Date.now()),
+            fields: {
+                "VALUE-0": group,
+                "VALUE-1": normalize(originalName)
+            }
+        };
+    }
+
+    async function openJListSelect(block, pairs) {
+        removeJListSelectPanel();
+
+        const overlay = document.createElement("div");
+        overlay.setAttribute("data-selection-list-plugin", "jlist-overlay");
+        Object.assign(overlay.style, {
+            position: "fixed",
+            inset: "0",
+            zIndex: "2147483646",
+            background: "rgba(0,0,0,.48)",
+            display: "flex",
+            alignItems: "stretch",
+            justifyContent: "center",
+            padding: "0",
+            boxSizing: "border-box"
+        });
+
+        const panel = document.createElement("div");
+        panel.setAttribute("data-selection-list-plugin", "jlist-panel");
+        Object.assign(panel.style, {
+            width: "min(860px, 94vw)",
+            height: "100vh",
+            maxHeight: "100vh",
+            display: "flex",
+            flexDirection: "column",
+            boxSizing: "border-box",
+            background: "#15191b",
+            color: "#f2f2f2",
+            borderLeft: "1px solid #3a4648",
+            borderRight: "1px solid #3a4648",
+            boxShadow: "0 0 28px rgba(0,0,0,.65)",
+            overflow: "hidden",
+            fontFamily: "Arial, sans-serif"
+        });
+
+        const header = document.createElement("div");
+        Object.assign(header.style, {
+            flex: "0 0 auto",
+            padding: "12px 16px 10px",
+            borderBottom: "1px solid #394447",
+            background: "#1d2426"
+        });
+
+        const titleRow = document.createElement("div");
+        Object.assign(titleRow.style, { display: "flex", alignItems: "center", gap: "10px", marginBottom: "9px" });
+        const title = document.createElement("div");
+        title.textContent = "List → JlistSelect";
+        Object.assign(title.style, { fontSize: "18px", fontWeight: "700", flex: "1" });
+        const countLabel = document.createElement("div");
+        Object.assign(countLabel.style, { fontSize: "12px", color: "#aab6b9" });
+        titleRow.appendChild(title);
+        titleRow.appendChild(countLabel);
+
+        const search = document.createElement("input");
+        search.type = "search";
+        search.placeholder = "日本語 / 元のリスト名を検索…";
+        Object.assign(search.style, {
+            width: "100%",
+            boxSizing: "border-box",
+            padding: "9px 11px",
+            border: "1px solid #4a595c",
+            borderRadius: "3px",
+            outline: "none",
+            background: "#0e1213",
+            color: "#fff",
+            fontSize: "15px"
+        });
+        search.addEventListener("focus", () => search.style.borderColor = "#789096");
+        search.addEventListener("blur", () => search.style.borderColor = "#4a595c");
+        header.appendChild(titleRow);
+        header.appendChild(search);
+
+        const list = document.createElement("div");
+        Object.assign(list.style, {
+            flex: "1 1 auto",
+            minHeight: "0",
+            overflowY: "auto",
+            overflowX: "hidden",
+            padding: "4px 0 24px",
+            background: "#111516"
+        });
+
+        const empty = document.createElement("div");
+        empty.textContent = "該当するリスト項目がありません。";
+        Object.assign(empty.style, { padding: "24px 18px", color: "#9da9ac", display: "none" });
+        list.appendChild(empty);
+
+        const sorted = sortJapaneseListPairs(pairs);
+        countLabel.textContent = `${sorted.length} 件`;
+
+        const rows = [];
+        const render = () => {
+            const q = normalize(search.value).toLocaleLowerCase("ja");
+            let visible = 0;
+            for (const row of rows) {
+                const hit = !q || row.searchText.includes(q);
+                row.el.style.display = hit ? "flex" : "none";
+                if (hit) visible++;
+            }
+            empty.style.display = visible ? "none" : "block";
+        };
+
+        sorted.forEach((pair, index) => {
+            const original = normalize(pair.original || pair.display);
+            const japanese = normalize(pair.japanese || original);
+            const row = document.createElement("div");
+            Object.assign(row.style, {
+                display: "flex",
+                alignItems: "center",
+                minHeight: "42px",
+                padding: "7px 16px",
+                boxSizing: "border-box",
+                borderBottom: "1px solid #273032",
+                cursor: "pointer",
+                gap: "14px"
+            });
+
+            const jp = document.createElement("div");
+            jp.textContent = japanese;
+            Object.assign(jp.style, {
+                flex: "0 0 42%",
+                minWidth: "0",
+                fontSize: "15px",
+                fontWeight: "600",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap"
+            });
+
+            const en = document.createElement("div");
+            en.textContent = original;
+            Object.assign(en.style, {
+                flex: "1 1 auto",
+                minWidth: "0",
+                fontSize: "13px",
+                color: "#9eabad",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap"
+            });
+
+            row.appendChild(jp);
+            row.appendChild(en);
+            row.addEventListener("mouseenter", () => row.style.background = "#263235");
+            row.addEventListener("mouseleave", () => row.style.background = "transparent");
+            row.addEventListener("click", async () => {
+                const payload = buildJListSelectBlock(block, original);
+                const ok = await copyToClipboard(JSON.stringify(payload, null, 2));
+                if (ok) {
+                    row.style.background = "#345047";
+                    setTimeout(() => { if (row.isConnected) row.style.background = "transparent"; }, 180);
+                    removeJListSelectPanel();
+                } else {
+                    alert(getPortalLanguage() === "ja" ? "クリップボードへのコピーに失敗しました。" : "Failed to copy to clipboard.");
+                }
+            });
+
+            list.appendChild(row);
+            rows.push({ el: row, searchText: `${japanese} ${original}`.toLocaleLowerCase("ja") });
+        });
+
+        panel.appendChild(header);
+        panel.appendChild(list);
+        overlay.appendChild(panel);
+        document.body.appendChild(overlay);
+
+        const closeByOutside = event => {
+            if (event.target === overlay) removeJListSelectPanel();
+        };
+        overlay.addEventListener("mousedown", closeByOutside);
+        search.addEventListener("input", render);
+        document.addEventListener("keydown", jListEscapeHandler, true);
+        search.focus();
+        render();
+    }
+
+    function jListEscapeHandler(event) {
+        if (event.key === "Escape") removeJListSelectPanel();
+    }
+
+    function removeJListSelectPanel() {
+        document.querySelectorAll('[data-selection-list-plugin="jlist-overlay"]').forEach(el => el.remove());
+        document.removeEventListener("keydown", jListEscapeHandler, true);
+    }
+
+    async function openJListSelectFromContext() {
+        const block = getCurrentContextBlock();
+        if (!block) {
+            alert(getPortalLanguage() === "ja" ? "右クリックしたブロックを取得できませんでした。" : "Could not get the context block.");
+            return;
+        }
+        const pairs = extractSelectionItemPairs(block);
+        if (!pairs.length) {
+            alert(getPortalLanguage() === "ja" ? "選択リストの候補を取得できませんでした。" : "No selection-list options could be found on this block.");
+            return;
+        }
+        const originals = pairs.map(p => normalize(p.original || p.display)).filter(Boolean);
+        const progressBar = originals.length > 256 ? createLoadingStatus(originals.length) : null;
+        if (progressBar) updateLoadingStatus(progressBar, 0, originals.length);
+        try {
+            const translated = await translateNames(originals, progressBar);
+            if (progressBar) removeLoadingStatus(progressBar);
+            const translatedMap = new Map();
+            originals.forEach((name, i) => translatedMap.set(normalize(name), translated[i] || name));
+            const translatedPairs = pairs.map(pair => ({
+                original: normalize(pair.original || pair.display),
+                japanese: translatedMap.get(normalize(pair.original || pair.display)) || normalize(pair.original || pair.display)
+            }));
+            await openJListSelect(block, translatedPairs);
+        } catch (error) {
+            if (progressBar) removeLoadingStatus(progressBar);
+            console.error("Selection_List JlistSelect failed", error);
+            alert(getPortalLanguage() === "ja" ? "日本語リストの作成に失敗しました。" : "Failed to create the Japanese list.");
+        }
+    }
+
     async function exportTranslatedTextFile(block, names) {
         const progressBar = names.length > 256 ? createLoadingStatus(names.length) : null;
         if (progressBar) updateLoadingStatus(progressBar, 0, names.length);
@@ -1019,6 +1260,10 @@
         // Build all three entries before attaching the panel. This avoids
         // PORTAL's MutationObserver reacting between individual insertions.
         const entries = [
+            menuItem("List → JlistSelect", async () => {
+                await openJListSelectFromContext();
+                removeFloatingMenu();
+            }),
             menuItem("List → array", async () => {
                 const data = getNamesOrAlert();
                 if (!data) return;
