@@ -997,20 +997,11 @@
         list.appendChild(empty);
 
         const rows = [];
-        let displayMode = "ja"; // ja -> en -> both
+        let displayMode = "jaen"; // jaen: Japanese left / English right, enja: English left / Japanese right
         const sortedPairs = () => {
             const copy = [...pairs];
-            if (displayMode === "en") {
+            if (displayMode === "enja") {
                 return copy.sort((a, b) => normalize(a.original || a.display).localeCompare(normalize(b.original || b.display), "en", { numeric: true, sensitivity: "base" }));
-            }
-            if (displayMode === "both") {
-                return copy.sort((a, b) => {
-                    const aa = normalize(a.japanese || a.original || a.display);
-                    const bb = normalize(b.japanese || b.original || b.display);
-                    const aLatin = /^[A-Za-z0-9]/.test(aa), bLatin = /^[A-Za-z0-9]/.test(bb);
-                    if (aLatin !== bLatin) return aLatin ? -1 : 1;
-                    return aa.localeCompare(bb, "ja", { numeric: true, sensitivity: "base" });
-                });
             }
             return copy.sort((a, b) => {
                 const aa = normalize(a.japanese || a.original || a.display);
@@ -1021,12 +1012,18 @@
             });
         };
 
-        const modeLabels = { ja: "Display: Japanese", en: "Display: English", both: "Display: Both" };
-        const modePlaceholders = { ja: "Search Japanese / original name…", en: "Search original name…", both: "Search Japanese / original name…" };
+        const modeLabels = {
+            jaen: "Display: Japanese | English",
+            enja: "Display: English | Japanese"
+        };
+        const modePlaceholders = {
+            jaen: "Search Japanese / original name…",
+            enja: "Search original name / Japanese…"
+        };
         const updateDisplay = () => {
             displayButton.textContent = modeLabels[displayMode];
             search.placeholder = modePlaceholders[displayMode];
-            const q = normalize(search.value).toLocaleLowerCase(displayMode === "en" ? "en" : "ja");
+            const q = normalize(search.value).toLocaleLowerCase(displayMode === "enja" ? "en" : "ja");
             const sorted = sortedPairs();
             rows.forEach(row => row.el.remove());
             rows.length = 0;
@@ -1035,13 +1032,18 @@
                 const japanese = normalize(pair.japanese || original);
                 const row = document.createElement("div");
                 Object.assign(row.style, { display: "flex", alignItems: "center", minHeight: "42px", padding: "7px 16px", boxSizing: "border-box", borderBottom: "1px solid #273032", cursor: "pointer", gap: "14px" });
-                const jp = document.createElement("div");
-                jp.textContent = japanese;
-                Object.assign(jp.style, { flex: "0 0 42%", minWidth: "0", fontSize: "15px", fontWeight: "600", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: displayMode === "en" ? "none" : "block" });
-                const en = document.createElement("div");
-                en.textContent = original;
-                Object.assign(en.style, { flex: displayMode === "ja" ? "1 1 auto" : "1 1 auto", minWidth: "0", fontSize: displayMode === "both" ? "13px" : "15px", color: displayMode === "ja" ? "#9eabad" : "#f2f2f2", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" });
-                row.appendChild(jp); row.appendChild(en);
+                const left = document.createElement("div");
+                const right = document.createElement("div");
+                if (displayMode === "jaen") {
+                    left.textContent = japanese;
+                    right.textContent = original;
+                } else {
+                    left.textContent = original;
+                    right.textContent = japanese;
+                }
+                Object.assign(left.style, { flex: "1 1 50%", minWidth: "0", fontSize: "15px", fontWeight: "600", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" });
+                Object.assign(right.style, { flex: "1 1 50%", minWidth: "0", fontSize: "15px", color: "#d1d9da", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" });
+                row.appendChild(left); row.appendChild(right);
                 row.addEventListener("mouseenter", () => row.style.background = "#263235");
                 row.addEventListener("mouseleave", () => row.style.background = "transparent");
                 row.addEventListener("click", async () => {
@@ -1055,8 +1057,8 @@
                     }
                 });
                 list.appendChild(row);
-                const searchText = displayMode === "en" ? original : `${japanese} ${original}`;
-                rows.push({ el: row, searchText: searchText.toLocaleLowerCase(displayMode === "en" ? "en" : "ja") });
+                const searchText = `${japanese} ${original}`;
+                rows.push({ el: row, searchText: searchText.toLocaleLowerCase(displayMode === "enja" ? "en" : "ja") });
             }
             let visible = 0;
             for (const row of rows) {
@@ -1071,7 +1073,7 @@
         displayButton.addEventListener("mouseenter", () => displayButton.style.background = "#303b3d");
         displayButton.addEventListener("mouseleave", () => displayButton.style.background = "#20282a");
         displayButton.addEventListener("click", () => {
-            displayMode = displayMode === "ja" ? "en" : displayMode === "en" ? "both" : "ja";
+            displayMode = displayMode === "jaen" ? "enja" : "jaen";
             updateDisplay();
             search.focus();
         });
