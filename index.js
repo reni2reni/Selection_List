@@ -912,8 +912,8 @@
         overlay.setAttribute("data-selection-list-plugin", "jlist-overlay");
         Object.assign(overlay.style, {
             position: "fixed", inset: "0", zIndex: "2147483646",
-            background: "rgba(0,0,0,.48)", display: "flex",
-            alignItems: "stretch", justifyContent: "center", padding: "0", boxSizing: "border-box"
+            background: "transparent", display: "block",
+            padding: "0", boxSizing: "border-box", pointerEvents: "none"
         });
 
         const panel = document.createElement("div");
@@ -933,6 +933,7 @@
             display: "flex", flexDirection: "column", boxSizing: "border-box",
             background: "#15191b", color: "#f2f2f2",
             border: "1px solid #3a4648",
+            pointerEvents: "auto",
             boxShadow: "0 0 28px rgba(0,0,0,.65)", overflow: "hidden", fontFamily: "Arial, sans-serif", position: "fixed", margin: "0"
         });
         const saveLayout = () => {
