@@ -709,7 +709,7 @@
     }
 
     function buildTypeAClipboard(block, names, japanese = false) {
-        const MAX_ITEMS_PER_ARRAY = 356;
+        const MAX_ITEMS_PER_ARRAY = 256;
         const pos = getBlockPosition(block);
         const x = Number(pos.x.toFixed(6));
         const base = getBaseVariableName(block);
@@ -723,7 +723,7 @@
         for (let offset = 0, chunkIndex = 0; offset < names.length; offset += MAX_ITEMS_PER_ARRAY, chunkIndex++) {
             const chunk = names.slice(offset, offset + MAX_ITEMS_PER_ARRAY);
             const suffix = String(chunkIndex + 1).padStart(2, "0");
-            const outputName = `${itemBase}${suffix}${japanese ? "_J" : ""}`;
+            const outputName = `${itemBase}${names.length > MAX_ITEMS_PER_ARRAY ? suffix : ""}${japanese ? "_J" : ""}`;
             const outputVariable = findNamedGlobalVariable(outputName);
 
             const initOutput = makeSetVariable(outputVariable, {
@@ -764,10 +764,11 @@
                 )
             };
 
-            const dataName = `${itemBase}${suffix}${japanese ? "_J" : ""}`;
+            const dataName = `${itemBase}${names.length > MAX_ITEMS_PER_ARRAY ? suffix : ""}${japanese ? "_J" : ""}`;
             chunks.push({
                 type: "subroutineBlock",
                 id: makeId("DataSub", chunkIndex),
+                collapsed: false,
                 extraState: { subroutineName: dataName, parameters: [] },
                 fields: { SUBROUTINE_NAME: dataName },
                 inputs: { ACTIONS: { block: initOutput } },
@@ -791,7 +792,7 @@
 
     async function createTypeA(block, names, japanese = false) {
         const payload = buildTypeAClipboard(block, names, japanese);
-        const count = Math.ceil(names.length / 356);
+        const count = Math.ceil(names.length / 256);
         await copyPayloadAndAlert(block, payload,
             getPortalLanguage() === "ja"
                 ? `TYPE-Aで${names.length}個を読み込み用サブルーチン方式で${count}個の配列サブルーチンにしてクリップボードへコピーしました。`
