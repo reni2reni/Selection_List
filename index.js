@@ -659,10 +659,10 @@
         };
     }
 
-    function buildTypeALoader(block, japanese) {
+    function buildTypeALoader(block, japanese, nameVariant = false) {
         const originalType = normalize(block?.type) || "SelectionItem";
         const base = originalType.endsWith("Item") ? originalType.slice(0, -4) : originalType;
-        const subroutineName = `TO_${base}${japanese ? "_J" : ""}`;
+        const subroutineName = `TO_${base}${nameVariant ? "N" : ""}${japanese ? "_J" : ""}`;
         const parameterType = "String";
         const appendVariable = findNamedGlobalVariable("Append");
         const argument = {
@@ -708,7 +708,7 @@
         };
     }
 
-    function buildTypeAClipboard(block, names, japanese = false) {
+    function buildTypeAClipboard(block, names, japanese = false, nameVariant = false) {
         const MAX_ITEMS_PER_ARRAY = 256;
         const pos = getBlockPosition(block);
         const x = Number(pos.x.toFixed(6));
@@ -716,14 +716,14 @@
         const originalType = normalize(block?.type) || "SelectionItem";
         const itemBase = originalType.endsWith("Item") ? originalType.slice(0, -4) : originalType;
         const appendVariable = findNamedGlobalVariable("Append");
-        const loader = buildTypeALoader(block, japanese);
+        const loader = buildTypeALoader(block, japanese, nameVariant);
         const loaderName = loader.extraState.subroutineName;
         const chunks = [];
 
         for (let offset = 0, chunkIndex = 0; offset < names.length; offset += MAX_ITEMS_PER_ARRAY, chunkIndex++) {
             const chunk = names.slice(offset, offset + MAX_ITEMS_PER_ARRAY);
             const suffix = String(chunkIndex + 1).padStart(2, "0");
-            const outputName = `${itemBase}${names.length > MAX_ITEMS_PER_ARRAY ? suffix : ""}${japanese ? "_J" : ""}`;
+            const outputName = `${itemBase}${nameVariant ? "N" : ""}${names.length > MAX_ITEMS_PER_ARRAY ? suffix : ""}${japanese ? "_J" : ""}`;
             const outputVariable = findNamedGlobalVariable(outputName);
 
             const initOutput = makeSetVariable(outputVariable, {
@@ -764,7 +764,7 @@
                 )
             };
 
-            const dataName = `${itemBase}${names.length > MAX_ITEMS_PER_ARRAY ? suffix : ""}${japanese ? "_J" : ""}`;
+            const dataName = `${itemBase}${nameVariant ? "N" : ""}${names.length > MAX_ITEMS_PER_ARRAY ? suffix : ""}${japanese ? "_J" : ""}`;
             chunks.push({
                 type: "subroutineBlock",
                 id: makeId("DataSub", chunkIndex),
@@ -790,8 +790,8 @@
         };
     }
 
-    async function createTypeA(block, names, japanese = false) {
-        const payload = buildTypeAClipboard(block, names, japanese);
+    async function createTypeA(block, names, japanese = false, nameVariant = false) {
+        const payload = buildTypeAClipboard(block, names, japanese, nameVariant);
         const count = Math.ceil(names.length / 256);
         await copyPayloadAndAlert(block, payload,
             getPortalLanguage() === "ja"
@@ -804,7 +804,7 @@
         if (progressBar) updateLoadingStatus(progressBar, 0, names.length);
         const translated = await translateNames(names, progressBar);
         if (progressBar) removeLoadingStatus(progressBar);
-        await createTypeA(block, translated, true);
+        await createTypeA(block, translated, true, true);
     }
 
     async function copyPayloadAndAlert(block, payload, message) {
@@ -1609,7 +1609,7 @@
                 async () => {
                     const data = getNamesOrAlert();
                     if (!data) return;
-                    await createTypeA(data.block, data.names, false);
+                    await createTypeA(data.block, data.names, false, true);
                     removeFloatingMenu();
                 },
                 async () => {
