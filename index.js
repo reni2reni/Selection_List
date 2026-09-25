@@ -768,11 +768,11 @@
             chunks.push({
                 type: "subroutineBlock",
                 id: makeId("DataSub", chunkIndex),
-                collapsed: false,
+                collapsed: true,
                 extraState: { subroutineName: dataName, parameters: [] },
                 fields: { SUBROUTINE_NAME: dataName },
                 inputs: { ACTIONS: { block: initOutput } },
-                _bf6Position: { x, y: Number((pos.y + chunkIndex * 53 * 20).toFixed(6)) }
+                _bf6Position: { x, y: Number((pos.y + chunkIndex * 106).toFixed(6)) }
             });
         }
 
