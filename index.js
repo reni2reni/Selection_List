@@ -617,196 +617,6 @@
         return { id: "", name, type: "Global" };
     }
 
-    // TYPE-A: reusable loader subroutine + data subroutine(s).
-    function getTypeAEnumName(block) {
-        const type = normalize(block?.type || "");
-        const base = type.endsWith("Item") ? type.slice(0, -4) : type;
-        return `Enum_${base || "Selection"}`;
-    }
-
-    function makeVariableReference(variable, prefix = "ARef") {
-        return {
-            type: "variableReferenceBlock",
-            id: makeId(prefix, Date.now()),
-            extraState: { isObjectVar: false },
-            fields: {
-                OBJECTTYPE: "Global",
-                VAR: {
-                    id: variable?.id || makeId(prefix + "Var", Date.now()),
-                    name: variable?.name || "Append",
-                    type: "Global"
-                }
-            }
-        };
-    }
-
-    function makeGetVariable(variable, prefix = "AGet") {
-        return {
-            type: "GetVariable",
-            id: makeId(prefix, Date.now()),
-            inputs: { "VALUE-0": { block: makeVariableReference(variable, prefix + "Ref") } }
-        };
-    }
-
-    function makeSetVariable(variable, valueBlock, prefix = "ASet") {
-        return {
-            type: "SetVariable",
-            id: makeId(prefix, Date.now()),
-            inputs: {
-                "VALUE-0": { block: makeVariableReference(variable, prefix + "Ref") },
-                "VALUE-1": { block: valueBlock }
-            }
-        };
-    }
-
-    function buildTypeALoader(block, japanese, nameVariant = false) {
-        const originalType = normalize(block?.type) || "SelectionItem";
-        const base = originalType.endsWith("Item") ? originalType.slice(0, -4) : originalType;
-        const subroutineName = `TO_${base}${nameVariant ? "N" : ""}${japanese ? "_J" : ""}`;
-        const parameterType = "String";
-        const appendVariable = findNamedGlobalVariable("Append");
-        const argument = {
-            type: "subroutineArgumentBlock",
-            id: makeId("Arg", Date.now()),
-            fields: { ARGUMENT_INDEX: "0" }
-        };
-        const appendToArray = {
-            type: "AppendToArray",
-            id: makeId("Append", Date.now()),
-            inputs: {
-                "VALUE-0": { block: makeGetVariable(appendVariable, "AppendGet") },
-                "VALUE-1": { block: argument }
-            }
-        };
-        return {
-            type: "subroutineBlock",
-            id: makeId("Loader", Date.now()),
-            extraState: {
-                subroutineName,
-                parameters: [{ types: parameterType, name: "type" }]
-            },
-            fields: { SUBROUTINE_NAME: subroutineName },
-            inputs: { ACTIONS: { block: makeSetVariable(appendVariable, appendToArray, "LoaderSet") } }
-        };
-    }
-
-    function buildTypeAItemArgument(block, name, japanese) {
-        if (japanese) {
-            return {
-                type: "Text",
-                id: makeId("JText", Date.now()),
-                fields: { TEXT: name }
-            };
-        }
-        return {
-            type: normalize(block?.type) || "SelectionItem",
-            id: makeId("TypeAItem", Date.now()),
-            fields: {
-                "VALUE-0": getFieldText(block, "VALUE-0"),
-                "VALUE-1": name
-            }
-        };
-    }
-
-    function buildTypeAClipboard(block, names, japanese = false, nameVariant = false) {
-        const MAX_ITEMS_PER_ARRAY = 256;
-        const pos = getBlockPosition(block);
-        const x = Number(pos.x.toFixed(6));
-        const base = getBaseVariableName(block);
-        const originalType = normalize(block?.type) || "SelectionItem";
-        const itemBase = originalType.endsWith("Item") ? originalType.slice(0, -4) : originalType;
-        const appendVariable = findNamedGlobalVariable("Append");
-        const loader = buildTypeALoader(block, japanese, nameVariant);
-        const loaderName = loader.extraState.subroutineName;
-        const chunks = [];
-
-        for (let offset = 0, chunkIndex = 0; offset < names.length; offset += MAX_ITEMS_PER_ARRAY, chunkIndex++) {
-            const chunk = names.slice(offset, offset + MAX_ITEMS_PER_ARRAY);
-            const suffix = String(chunkIndex + 1).padStart(2, "0");
-            const outputName = `${itemBase}${nameVariant ? "N" : ""}${names.length > MAX_ITEMS_PER_ARRAY ? suffix : ""}${japanese ? "_J" : ""}`;
-            const outputVariable = findNamedGlobalVariable(outputName);
-
-            const initOutput = makeSetVariable(outputVariable, {
-                type: "EmptyArray",
-                id: makeId("Empty", chunkIndex)
-            }, "InitArray");
-            const initAppend = makeSetVariable(appendVariable, {
-                type: "EmptyArray",
-                id: makeId("EmptyAppend", chunkIndex)
-            }, "InitAppend");
-            initOutput.next = { block: initAppend };
-
-            let tail = initAppend;
-            chunk.forEach((name, localIndex) => {
-                const instance = {
-                    type: "subroutineInstanceBlock",
-                    id: makeId("Call", offset + localIndex),
-                    extraState: {
-                        subroutineName: loaderName,
-                        parameters: [{
-                            types: "String",
-                            name: "type"
-                        }]
-                    },
-                    fields: { SUBROUTINE_NAME: loaderName },
-                    inputs: {
-                        "PARAM-0": { block: buildTypeAItemArgument(block, name, japanese) }
-                    }
-                };
-                tail.next = { block: instance };
-                tail = instance;
-            });
-            tail.next = {
-                block: makeSetVariable(
-                    outputVariable,
-                    makeGetVariable(appendVariable, "FinalGet"),
-                    "FinalSet"
-                )
-            };
-
-            const dataName = `${itemBase}${nameVariant ? "N" : ""}${names.length > MAX_ITEMS_PER_ARRAY ? suffix : ""}${japanese ? "_J" : ""}`;
-            chunks.push({
-                type: "subroutineBlock",
-                id: makeId("DataSub", chunkIndex),
-                collapsed: false,
-                extraState: { subroutineName: dataName, parameters: [] },
-                fields: { SUBROUTINE_NAME: dataName },
-                inputs: { ACTIONS: { block: initOutput } },
-                _bf6Position: { x, y: Number((pos.y + chunkIndex * 53 * 20).toFixed(6)) }
-            });
-        }
-
-        return {
-            _bf6MultiBlockClipboard: 1,
-            blocks: [loader, ...chunks],
-            sourceIds: [loader.id, ...chunks.map(b => b.id)],
-            connections: [],
-            _selectionListTypeA: {
-                loader: loaderName,
-                parameterType: "String",
-                maxItemsPerArray: MAX_ITEMS_PER_ARRAY,
-                itemCount: names.length
-            }
-        };
-    }
-
-    async function createTypeA(block, names, japanese = false, nameVariant = false) {
-        const payload = buildTypeAClipboard(block, names, japanese, nameVariant);
-        const count = Math.ceil(names.length / 256);
-        await copyPayloadAndAlert(block, payload,
-            getPortalLanguage() === "ja"
-                ? `TYPE-Aで${names.length}個を読み込み用サブルーチン方式で${count}個の配列サブルーチンにしてクリップボードへコピーしました。`
-                : `Copied ${names.length} items as TYPE-A using a loader subroutine and ${count} array subroutine(s).`);
-    }
-
-    async function createTypeAJapanese(block, names) {
-        const progressBar = names.length > 256 ? createLoadingStatus(names.length) : null;
-        if (progressBar) updateLoadingStatus(progressBar, 0, names.length);
-        const translated = await translateNames(names, progressBar);
-        if (progressBar) removeLoadingStatus(progressBar);
-        await createTypeA(block, translated, true, true);
-    }
-
     async function copyPayloadAndAlert(block, payload, message) {
         const text = JSON.stringify(payload, null, 2);
         const ok = await copyToClipboard(text);
@@ -1418,86 +1228,6 @@
         return item;
     }
 
-    function menuItemTypeChoice(label, typeAAction, typeBAction) {
-        const item = document.createElement("div");
-        item.className = "selection-list-plugin-menu-item";
-        item.setAttribute("data-selection-list-plugin", "type-choice");
-        Object.assign(item.style, {
-            padding: "5px 18px",
-            whiteSpace: "nowrap",
-            background: "rgb(22, 29, 30)",
-            color: "#ffffff",
-            cursor: "pointer",
-            fontSize: "15px",
-            lineHeight: "1.3",
-            borderTop: "1px solid #3a4648",
-            position: "relative"
-        });
-
-        const labelEl = document.createElement("span");
-        labelEl.textContent = `${label}  ›`;
-        item.appendChild(labelEl);
-
-        let child = null;
-        const removeChild = () => {
-            if (child) {
-                child.remove();
-                child = null;
-            }
-        };
-        const makeChoice = (text, action) => {
-            const choice = document.createElement("div");
-            choice.textContent = text;
-            Object.assign(choice.style, {
-                padding: "5px 18px",
-                minWidth: "95px",
-                whiteSpace: "nowrap",
-                background: "rgb(22, 29, 30)",
-                color: "#ffffff",
-                cursor: "pointer",
-                fontSize: "15px",
-                lineHeight: "1.3",
-                borderTop: "1px solid #3a4648"
-            });
-            choice.addEventListener("mouseenter", () => choice.style.background = "rgb(48, 60, 62)");
-            choice.addEventListener("mouseleave", () => choice.style.background = "rgb(22, 29, 30)");
-            choice.addEventListener("click", event => {
-                event.preventDefault();
-                event.stopPropagation();
-                event.stopImmediatePropagation?.();
-                try { action(); } catch (e) { console.error("Selection_List TYPE action failed", e); }
-            }, true);
-            return choice;
-        };
-
-        item.addEventListener("mouseenter", () => {
-            item.style.background = "rgb(48, 60, 62)";
-            if (child) return;
-            child = document.createElement("div");
-            child.setAttribute("data-selection-list-plugin", "type-choice-panel");
-            Object.assign(child.style, {
-                position: "absolute",
-                left: "100%",
-                top: "-1px",
-                minWidth: "95px",
-                padding: "2px 0",
-                background: "rgb(22, 29, 30)",
-                border: "1px solid #3a4648",
-                boxShadow: "0 3px 14px rgba(0,0,0,.45)",
-                zIndex: "2147483647"
-            });
-            child.appendChild(makeChoice("TYPE-A", typeAAction));
-            child.appendChild(makeChoice("TYPE-B", typeBAction));
-            item.appendChild(child);
-        });
-        item.addEventListener("mouseleave", event => {
-            item.style.background = "rgb(22, 29, 30)";
-            if (child && event.relatedTarget && child.contains(event.relatedTarget)) return;
-            removeChild();
-        });
-        return item;
-    }
-
     function getCurrentContextBlock() {
         return lastContextBlock || getBlockFromId(lastContextBlockId);
     }
@@ -1591,48 +1321,24 @@
                     });
                 }, 0);
             }),
-            menuItemTypeChoice("List → array",
-                async () => {
-                    const data = getNamesOrAlert();
-                    if (!data) return;
-                    await createTypeA(data.block, data.names, false);
-                    removeFloatingMenu();
-                },
-                async () => {
-                    const data = getNamesOrAlert();
-                    if (!data) return;
-                    await createParallel(data.block, data.names);
-                    removeFloatingMenu();
-                }
-            ),
-            menuItemTypeChoice("ListName → array",
-                async () => {
-                    const data = getNamesOrAlert();
-                    if (!data) return;
-                    await createTypeA(data.block, data.names, false, true);
-                    removeFloatingMenu();
-                },
-                async () => {
-                    const data = getNamesOrAlert();
-                    if (!data) return;
-                    await createTextArray(data.block, data.names);
-                    removeFloatingMenu();
-                }
-            ),
-            menuItemTypeChoice("ListName → array (J)",
-                async () => {
-                    const data = getNamesOrAlert();
-                    if (!data) return;
-                    await createTypeAJapanese(data.block, data.names);
-                    removeFloatingMenu();
-                },
-                async () => {
-                    const data = getNamesOrAlert();
-                    if (!data) return;
-                    await createJapaneseArray(data.block, data.names);
-                    removeFloatingMenu();
-                }
-            ),
+            menuItem("List → array", async () => {
+                const data = getNamesOrAlert();
+                if (!data) return;
+                await createParallel(data.block, data.names);
+                removeFloatingMenu();
+            }),
+            menuItem("ListName → array", async () => {
+                const data = getNamesOrAlert();
+                if (!data) return;
+                await createTextArray(data.block, data.names);
+                removeFloatingMenu();
+            }),
+            menuItem("ListName → array (J)", async () => {
+                const data = getNamesOrAlert();
+                if (!data) return;
+                await createJapaneseArray(data.block, data.names);
+                removeFloatingMenu();
+            }),
             menuItem("ListName → File", () => {
                 const data = getNamesOrAlert();
                 if (!data) return;
