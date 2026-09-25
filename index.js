@@ -925,8 +925,9 @@
         const panel = document.createElement("div");
         panel.setAttribute("data-selection-list-plugin", "jlist-panel");
         Object.assign(panel.style, {
-            width: "min(860px, 94vw)",
+            width: "100vw",
             height: "100vh",
+            maxWidth: "100vw",
             maxHeight: "100vh",
             display: "flex",
             flexDirection: "column",
@@ -952,11 +953,25 @@
         Object.assign(titleRow.style, { display: "flex", alignItems: "center", gap: "10px", marginBottom: "9px" });
         const title = document.createElement("div");
         title.textContent = "List → JlistSelect";
-        Object.assign(title.style, { fontSize: "18px", fontWeight: "700", flex: "1" });
+        Object.assign(title.style, { fontSize: "18px", fontWeight: "700", flex: "1", cursor: "move", userSelect: "none" });
         const countLabel = document.createElement("div");
         Object.assign(countLabel.style, { fontSize: "12px", color: "#aab6b9" });
+        const closeButton = document.createElement("button");
+        closeButton.type = "button";
+        closeButton.textContent = "✕";
+        Object.assign(closeButton.style, {
+            flex: "0 0 auto", width: "32px", height: "30px", padding: "0",
+            border: "1px solid #4a595c", borderRadius: "4px",
+            background: "#20282a", color: "#d7dddd", fontSize: "17px",
+            lineHeight: "28px", cursor: "pointer"
+        });
+        closeButton.title = "閉じる";
+        closeButton.addEventListener("mouseenter", () => closeButton.style.background = "#3a2424");
+        closeButton.addEventListener("mouseleave", () => closeButton.style.background = "#20282a");
+        closeButton.addEventListener("click", () => removeJListSelectPanel());
         titleRow.appendChild(title);
         titleRow.appendChild(countLabel);
+        titleRow.appendChild(closeButton);
 
         const search = document.createElement("input");
         search.type = "search";
@@ -1056,7 +1071,6 @@
                 if (ok) {
                     row.style.background = "#345047";
                     setTimeout(() => { if (row.isConnected) row.style.background = "transparent"; }, 180);
-                    removeJListSelectPanel();
                 } else {
                     alert(getPortalLanguage() === "ja" ? "クリップボードへのコピーに失敗しました。" : "Failed to copy to clipboard.");
                 }
@@ -1066,27 +1080,89 @@
             rows.push({ el: row, searchText: `${japanese} ${original}`.toLocaleLowerCase("ja") });
         });
 
-        panel.appendChild(header);
-        panel.appendChild(list);
-        overlay.appendChild(panel);
-        document.body.appendChild(overlay);
+        // Resize handle: bottom-right corner.
+        const resizeHandle = document.createElement("div");
+        Object.assign(resizeHandle.style, {
+            position: "absolute", right: "0", bottom: "0", width: "22px", height: "22px",
+            cursor: "nwse-resize", zIndex: "5",
+            background: "linear-gradient(135deg, transparent 0 45%, #657477 46% 52%, transparent 53% 62%, #657477 63% 69%, transparent 70%)"
+        });
+        panel.style.position = "relative";
+        panel.appendChild(resizeHandle);
 
-        const closeByOutside = event => {
-            if (event.target === overlay) removeJListSelectPanel();
+        // Drag by the title bar. Keep the initially full-size window, but allow it to be moved.
+        let dragging = false;
+        let dragStartX = 0, dragStartY = 0, panelStartX = 0, panelStartY = 0;
+        const startDrag = event => {
+            if (event.button !== 0 || event.target === closeButton) return;
+            dragging = true;
+            const rect = panel.getBoundingClientRect();
+            dragStartX = event.clientX; dragStartY = event.clientY;
+            panelStartX = rect.left; panelStartY = rect.top;
+            panel.style.position = "fixed";
+            panel.style.left = `${rect.left}px`; panel.style.top = `${rect.top}px`;
+            panel.style.margin = "0";
+            panel.style.width = `${rect.width}px`; panel.style.height = `${rect.height}px`;
+            panel.style.maxWidth = "none"; panel.style.maxHeight = "none";
+            event.preventDefault();
         };
-        overlay.addEventListener("mousedown", closeByOutside);
+        const moveDrag = event => {
+            if (!dragging) return;
+            panel.style.left = `${panelStartX + event.clientX - dragStartX}px`;
+            panel.style.top = `${panelStartY + event.clientY - dragStartY}px`;
+        };
+        const endDrag = () => { dragging = false; };
+        titleRow.addEventListener("mousedown", startDrag);
+        document.addEventListener("mousemove", moveDrag, true);
+        document.addEventListener("mouseup", endDrag, true);
+
+        let resizing = false;
+        let resizeStartX = 0, resizeStartY = 0, resizeStartW = 0, resizeStartH = 0;
+        const startResize = event => {
+            if (event.button !== 0) return;
+            resizing = true;
+            const rect = panel.getBoundingClientRect();
+            resizeStartX = event.clientX; resizeStartY = event.clientY;
+            resizeStartW = rect.width; resizeStartH = rect.height;
+            panel.style.position = "fixed";
+            panel.style.left = `${rect.left}px`; panel.style.top = `${rect.top}px`;
+            panel.style.margin = "0";
+            panel.style.width = `${rect.width}px`; panel.style.height = `${rect.height}px`;
+            panel.style.maxWidth = "none"; panel.style.maxHeight = "none";
+            event.preventDefault(); event.stopPropagation();
+        };
+        const moveResize = event => {
+            if (!resizing) return;
+            const w = Math.max(420, resizeStartW + event.clientX - resizeStartX);
+            const h = Math.max(260, resizeStartH + event.clientY - resizeStartY);
+            panel.style.width = `${w}px`; panel.style.height = `${h}px`;
+        };
+        const endResize = () => { resizing = false; };
+        resizeHandle.addEventListener("mousedown", startResize);
+        document.addEventListener("mousemove", moveResize, true);
+        document.addEventListener("mouseup", endResize, true);
+
         search.addEventListener("input", render);
-        document.addEventListener("keydown", jListEscapeHandler, true);
+        overlay._jlistCleanup = () => {
+            document.removeEventListener("mousemove", moveDrag, true);
+            document.removeEventListener("mouseup", endDrag, true);
+            document.removeEventListener("mousemove", moveResize, true);
+            document.removeEventListener("mouseup", endResize, true);
+            document.removeEventListener("keydown", jListEscapeHandler, true);
+        };
         search.focus();
         render();
     }
 
     function jListEscapeHandler(event) {
-        if (event.key === "Escape") removeJListSelectPanel();
+        // JlistSelect is intentionally closed only by its top-right X button.
     }
 
     function removeJListSelectPanel() {
-        document.querySelectorAll('[data-selection-list-plugin="jlist-overlay"]').forEach(el => el.remove());
+        document.querySelectorAll('[data-selection-list-plugin="jlist-overlay"]').forEach(el => {
+            try { el._jlistCleanup?.(); } catch (_) {}
+            el.remove();
+        });
         document.removeEventListener("keydown", jListEscapeHandler, true);
     }
 
