@@ -1432,48 +1432,62 @@
     }
 
     function getOptionsMenuContainers() {
-        const found = [];
+        const candidates = [];
         const seen = new Set();
-        const add = element => {
-            if (!element || seen.has(element) || !isVisibleMenuElement(element)) return;
+        const nativeSelector = ".bf6-options-menu-item, .bf6-options-menu-label";
+
+        const addCandidate = element => {
+            if (!element || seen.has(element) || !element.isConnected) return;
+            // Never treat an individual Options item/label as the menu itself.
+            if (element.matches?.(nativeSelector)) return;
+            try {
+                const style = window.getComputedStyle(element);
+                if (style.display === "none" || style.visibility === "hidden") return;
+                const rect = element.getBoundingClientRect();
+                if (rect.width <= 0 || rect.height <= 0) return;
+            } catch (_) {}
+
+            const items = element.querySelectorAll?.(nativeSelector) || [];
+            // A real Options container has multiple native entries. This
+            // prevents the broad fallback selectors from matching each item.
+            if (items.length < 2) return;
             seen.add(element);
-            found.push(element);
+            candidates.push(element);
         };
 
-        // Current BF2042 Portal Extensions / newer Portal DOM.
+        // Known/current Portal Extensions menu wrapper.
         document.querySelectorAll(
             ".bf6-experience-manager-options-submenu, " +
             ".bf6-options-menu, " +
             ".bf6-options-submenu, " +
-            ".bf6-experience-manager-options-menu, " +
-            "[class*='options-submenu'], " +
-            "[class*='options-menu']"
-        ).forEach(add);
+            ".bf6-experience-manager-options-menu"
+        ).forEach(addCandidate);
 
-        // Original BF2042 Portal Extensions can expose the Options popup with
-        // the native menu-item classes but without the newer
-        // .bf6-experience-manager-options-submenu wrapper. In that case,
-        // look for the visible menu-like ancestor containing the native
-        // options entries.
-        const nativeItems = Array.from(document.querySelectorAll(
-            ".bf6-options-menu-item, .bf6-options-menu-label"
-        ));
+        // Original BF2042 Portal Extensions: locate the actual menu ancestor
+        // from its native menu entries. Limit the walk so we do not accidentally
+        // select a page-level wrapper containing several unrelated menus.
+        const nativeItems = Array.from(document.querySelectorAll(nativeSelector));
         for (const item of nativeItems) {
             let parent = item.parentElement;
-            for (let depth = 0; parent && depth < 5; depth++, parent = parent.parentElement) {
+            for (let depth = 0; parent && depth < 6; depth++, parent = parent.parentElement) {
                 const className = typeof parent.className === "string" ? parent.className : "";
                 if (!/options|menu/i.test(className)) continue;
-                const itemCount = parent.querySelectorAll(
-                    ".bf6-options-menu-item, .bf6-options-menu-label"
-                ).length;
-                if (itemCount >= 2) {
-                    add(parent);
-                    break;
-                }
+                addCandidate(parent);
+                break;
             }
         }
 
-        return found;
+        // Remove nested candidates. If a broad ancestor and its child both
+        // matched, only the innermost actual menu container should receive our
+        // Selection List item; otherwise every menu entry can get duplicated.
+        const result = candidates.filter(candidate =>
+            !candidates.some(other => other !== candidate &&
+                other.contains(candidate) &&
+                other.querySelectorAll(nativeSelector).length >=
+                    candidate.querySelectorAll(nativeSelector).length)
+        );
+
+        return result;
     }
 
     function scan() {
