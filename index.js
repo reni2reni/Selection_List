@@ -663,7 +663,7 @@
         const originalType = normalize(block?.type) || "SelectionItem";
         const base = originalType.endsWith("Item") ? originalType.slice(0, -4) : originalType;
         const subroutineName = `TO_${base}${japanese ? "_J" : ""}`;
-        const parameterType = japanese ? "Text" : getTypeAEnumName(block);
+        const parameterType = "String";
         const appendVariable = findNamedGlobalVariable("Append");
         const argument = {
             type: "subroutineArgumentBlock",
@@ -744,7 +744,7 @@
                     extraState: {
                         subroutineName: loaderName,
                         parameters: [{
-                            types: japanese ? "Text" : getTypeAEnumName(block),
+                            types: "String",
                             name: "type"
                         }]
                     },
@@ -783,7 +783,7 @@
             connections: [],
             _selectionListTypeA: {
                 loader: loaderName,
-                parameterType: japanese ? "Text" : getTypeAEnumName(block),
+                parameterType: "String",
                 maxItemsPerArray: MAX_ITEMS_PER_ARRAY,
                 itemCount: names.length
             }
