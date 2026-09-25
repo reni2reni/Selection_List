@@ -919,11 +919,11 @@
         const panel = document.createElement("div");
         panel.setAttribute("data-selection-list-plugin", "jlist-panel");
         Object.assign(panel.style, {
-            width: "100vw", height: "100vh", maxWidth: "100vw", maxHeight: "100vh",
+            width: "calc(100vw - 12px)", height: "calc(100vh - 24px)", maxWidth: "none", maxHeight: "none",
             display: "flex", flexDirection: "column", boxSizing: "border-box",
             background: "#15191b", color: "#f2f2f2",
             borderLeft: "1px solid #3a4648", borderRight: "1px solid #3a4648",
-            boxShadow: "0 0 28px rgba(0,0,0,.65)", overflow: "hidden", fontFamily: "Arial, sans-serif"
+            boxShadow: "0 0 28px rgba(0,0,0,.65)", overflow: "hidden", fontFamily: "Arial, sans-serif", position: "relative", margin: "0 auto 24px"
         });
 
         const header = document.createElement("div");
@@ -1060,11 +1060,14 @@
         });
         search.addEventListener("input", updateDisplay);
 
-        // Resize handle: bottom-right corner.
+        // Dedicated bottom resize strip so the bottom-right corner is easy to grab.
+        const resizeStrip = document.createElement("div");
+        Object.assign(resizeStrip.style, { position: "absolute", left: "0", right: "0", bottom: "0", height: "24px", zIndex: "5", background: "rgba(35,44,46,.96)", borderTop: "1px solid #394447", boxSizing: "border-box" });
         const resizeHandle = document.createElement("div");
-        Object.assign(resizeHandle.style, { position: "absolute", right: "0", bottom: "0", width: "22px", height: "22px", cursor: "nwse-resize", zIndex: "5", background: "linear-gradient(135deg, transparent 0 45%, #657477 46% 52%, transparent 53% 62%, #657477 63% 69%, transparent 70%)" });
-        panel.style.position = "relative";
-        panel.appendChild(resizeHandle);
+        Object.assign(resizeHandle.style, { position: "absolute", right: "2px", bottom: "2px", width: "24px", height: "20px", cursor: "nwse-resize", background: "linear-gradient(135deg, transparent 0 45%, #657477 46% 52%, transparent 53% 62%, #657477 63% 69%, transparent 70%)" });
+        resizeStrip.appendChild(resizeHandle);
+        panel.style.paddingBottom = "24px";
+        panel.appendChild(resizeStrip);
 
         let dragging = false, dragStartX = 0, dragStartY = 0, panelStartX = 0, panelStartY = 0;
         const startDrag = event => {
@@ -1090,7 +1093,7 @@
             panel.style.width = `${rect.width}px`; panel.style.height = `${rect.height}px`; panel.style.maxWidth = "none"; panel.style.maxHeight = "none";
             event.preventDefault(); event.stopPropagation();
         };
-        const moveResize = event => { if (resizing) { panel.style.width = `${Math.max(420, resizeStartW + event.clientX - resizeStartX)}px`; panel.style.height = `${Math.max(260, resizeStartH + event.clientY - resizeStartY)}px`; } };
+        const moveResize = event => { if (resizing) { panel.style.width = `${Math.max(420, resizeStartW + event.clientX - resizeStartX)}px`; panel.style.height = `${Math.max(300, resizeStartH + event.clientY - resizeStartY)}px`; } };
         const endResize = () => { resizing = false; };
         resizeHandle.addEventListener("mousedown", startResize);
         document.addEventListener("mousemove", moveResize, true); document.addEventListener("mouseup", endResize, true);
@@ -1287,9 +1290,17 @@
         // Build all three entries before attaching the panel. This avoids
         // PORTAL's MutationObserver reacting between individual insertions.
         const entries = [
-            menuItem("List → JlistSelect", async () => {
-                await openJListSelectFromContext();
-                removeFloatingMenu();
+            menuItem("List → JlistSelect", async (event) => {
+                try {
+                    event?.preventDefault?.();
+                    event?.stopPropagation?.();
+                    event?.stopImmediatePropagation?.();
+                } catch (_) {}
+                setTimeout(() => {
+                    openJListSelectFromContext().catch(error => {
+                        console.error("Selection_List JlistSelect failed", error);
+                    });
+                }, 0);
             }),
             menuItem("List → array", async () => {
                 const data = getNamesOrAlert();
