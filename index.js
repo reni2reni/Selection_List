@@ -1419,15 +1419,77 @@
         submenu.appendChild(root);
     }
 
+    function isVisibleMenuElement(element) {
+        if (!element || !element.isConnected) return false;
+        try {
+            const style = window.getComputedStyle(element);
+            if (style.display === "none" || style.visibility === "hidden") return false;
+            const rect = element.getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0;
+        } catch (_) {
+            return true;
+        }
+    }
+
+    function getOptionsMenuContainers() {
+        const found = [];
+        const seen = new Set();
+        const add = element => {
+            if (!element || seen.has(element) || !isVisibleMenuElement(element)) return;
+            seen.add(element);
+            found.push(element);
+        };
+
+        // Current BF2042 Portal Extensions / newer Portal DOM.
+        document.querySelectorAll(
+            ".bf6-experience-manager-options-submenu, " +
+            ".bf6-options-menu, " +
+            ".bf6-options-submenu, " +
+            ".bf6-experience-manager-options-menu, " +
+            "[class*='options-submenu'], " +
+            "[class*='options-menu']"
+        ).forEach(add);
+
+        // Original BF2042 Portal Extensions can expose the Options popup with
+        // the native menu-item classes but without the newer
+        // .bf6-experience-manager-options-submenu wrapper. In that case,
+        // look for the visible menu-like ancestor containing the native
+        // options entries.
+        const nativeItems = Array.from(document.querySelectorAll(
+            ".bf6-options-menu-item, .bf6-options-menu-label"
+        ));
+        for (const item of nativeItems) {
+            let parent = item.parentElement;
+            for (let depth = 0; parent && depth < 5; depth++, parent = parent.parentElement) {
+                const className = typeof parent.className === "string" ? parent.className : "";
+                if (!/options|menu/i.test(className)) continue;
+                const itemCount = parent.querySelectorAll(
+                    ".bf6-options-menu-item, .bf6-options-menu-label"
+                ).length;
+                if (itemCount >= 2) {
+                    add(parent);
+                    break;
+                }
+            }
+        }
+
+        return found;
+    }
+
     function scan() {
         const block = getCurrentContextBlock();
         const eligible = isSelectionListBlock(block);
-        const submenus = document.querySelectorAll(".bf6-experience-manager-options-submenu");
+        const submenus = getOptionsMenuContainers();
+        const allRoots = document.querySelectorAll('[data-selection-list-plugin="root"]');
         if (!eligible) {
-            submenus.forEach(submenu => submenu.querySelector('[data-selection-list-plugin="root"]')?.remove());
+            allRoots.forEach(root => root.remove());
             removeFloatingMenu();
             return;
         }
+
+        // Attach to whichever Options menu implementation is present.
+        // This keeps the same Selection List UI while supporting both the
+        // current Portal Extensions DOM and the original BF2042 extension.
         for (const submenu of submenus) addSelectionListMenu(submenu);
     }
 
