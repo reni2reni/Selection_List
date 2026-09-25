@@ -1419,91 +1419,15 @@
         submenu.appendChild(root);
     }
 
-    function isVisibleMenuElement(element) {
-        if (!element || !element.isConnected) return false;
-        try {
-            const style = window.getComputedStyle(element);
-            if (style.display === "none" || style.visibility === "hidden") return false;
-            const rect = element.getBoundingClientRect();
-            return rect.width > 0 && rect.height > 0;
-        } catch (_) {
-            return true;
-        }
-    }
-
-    function getOptionsMenuContainers() {
-        const candidates = [];
-        const seen = new Set();
-        const nativeSelector = ".bf6-options-menu-item, .bf6-options-menu-label";
-
-        const addCandidate = element => {
-            if (!element || seen.has(element) || !element.isConnected) return;
-            // Never treat an individual Options item/label as the menu itself.
-            if (element.matches?.(nativeSelector)) return;
-            try {
-                const style = window.getComputedStyle(element);
-                if (style.display === "none" || style.visibility === "hidden") return;
-                const rect = element.getBoundingClientRect();
-                if (rect.width <= 0 || rect.height <= 0) return;
-            } catch (_) {}
-
-            const items = element.querySelectorAll?.(nativeSelector) || [];
-            // A real Options container has multiple native entries. This
-            // prevents the broad fallback selectors from matching each item.
-            if (items.length < 2) return;
-            seen.add(element);
-            candidates.push(element);
-        };
-
-        // Known/current Portal Extensions menu wrapper.
-        document.querySelectorAll(
-            ".bf6-experience-manager-options-submenu, " +
-            ".bf6-options-menu, " +
-            ".bf6-options-submenu, " +
-            ".bf6-experience-manager-options-menu"
-        ).forEach(addCandidate);
-
-        // Original BF2042 Portal Extensions: locate the actual menu ancestor
-        // from its native menu entries. Limit the walk so we do not accidentally
-        // select a page-level wrapper containing several unrelated menus.
-        const nativeItems = Array.from(document.querySelectorAll(nativeSelector));
-        for (const item of nativeItems) {
-            let parent = item.parentElement;
-            for (let depth = 0; parent && depth < 6; depth++, parent = parent.parentElement) {
-                const className = typeof parent.className === "string" ? parent.className : "";
-                if (!/options|menu/i.test(className)) continue;
-                addCandidate(parent);
-                break;
-            }
-        }
-
-        // Remove nested candidates. If a broad ancestor and its child both
-        // matched, only the innermost actual menu container should receive our
-        // Selection List item; otherwise every menu entry can get duplicated.
-        const result = candidates.filter(candidate =>
-            !candidates.some(other => other !== candidate &&
-                other.contains(candidate) &&
-                other.querySelectorAll(nativeSelector).length >=
-                    candidate.querySelectorAll(nativeSelector).length)
-        );
-
-        return result;
-    }
-
     function scan() {
         const block = getCurrentContextBlock();
         const eligible = isSelectionListBlock(block);
-        const submenus = getOptionsMenuContainers();
-        const allRoots = document.querySelectorAll('[data-selection-list-plugin="root"]');
+        const submenus = document.querySelectorAll(".bf6-experience-manager-options-submenu");
         if (!eligible) {
-            allRoots.forEach(root => root.remove());
+            submenus.forEach(submenu => submenu.querySelector('[data-selection-list-plugin="root"]')?.remove());
             removeFloatingMenu();
             return;
         }
-
-        // Attach to whichever Options menu implementation is present.
-        // This keeps the same Selection List UI while supporting both the
-        // current Portal Extensions DOM and the original BF2042 extension.
         for (const submenu of submenus) addSelectionListMenu(submenu);
     }
 
