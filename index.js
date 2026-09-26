@@ -991,7 +991,17 @@
         });
 
         const countLabel = document.createElement("div");
-        Object.assign(countLabel.style, { fontSize: "12px", color: "#aab6b9" });
+        Object.assign(countLabel.style, { fontSize: "12px", color: "#aab6b9", minWidth: "120px", textAlign: "right" });
+
+        const copySelectedButton = document.createElement("button");
+        copySelectedButton.type = "button";
+        copySelectedButton.textContent = "Copy selected (0)";
+        Object.assign(copySelectedButton.style, {
+            flex: "0 0 auto", height: "30px", padding: "0 11px", border: "1px solid #4a595c",
+            borderRadius: "4px", background: "#20282a", color: "#d7dddd", fontSize: "12px",
+            cursor: "pointer", whiteSpace: "nowrap", opacity: "0.55"
+        });
+        copySelectedButton.title = "Copy selected items. Shift+click = range, Ctrl/Cmd+click = individual selection.";
         const closeButton = document.createElement("button");
         closeButton.type = "button";
         closeButton.textContent = "✕";
@@ -1005,6 +1015,7 @@
         closeButton.addEventListener("click", () => removeJListSelectPanel());
         titleRow.appendChild(title);
         titleRow.appendChild(displayButton);
+        titleRow.appendChild(copySelectedButton);
         titleRow.appendChild(countLabel);
         titleRow.appendChild(closeButton);
 
@@ -1027,6 +1038,8 @@
         list.appendChild(empty);
 
         const rows = [];
+        const selectedOriginals = new Set();
+        let lastSelectedOriginal = null;
         let displayMode = "jaen"; // jaen: Japanese left / English right, enja: English left / Japanese right
         const sortedPairs = () => {
             const copy = [...pairs];
@@ -1061,7 +1074,7 @@
                 const original = normalize(pair.original || pair.display);
                 const japanese = normalize(pair.japanese || original);
                 const row = document.createElement("div");
-                Object.assign(row.style, { display: "flex", alignItems: "center", minHeight: "42px", padding: "7px 16px", boxSizing: "border-box", borderBottom: "1px solid #273032", cursor: "pointer", gap: "14px" });
+                Object.assign(row.style, { display: "flex", alignItems: "center", minHeight: "42px", padding: "7px 16px", boxSizing: "border-box", borderBottom: "1px solid #273032", cursor: "pointer", gap: "14px", userSelect: "none" });
                 const left = document.createElement("div");
                 const right = document.createElement("div");
                 if (displayMode === "jaen") {
@@ -1074,21 +1087,66 @@
                 Object.assign(left.style, { flex: "1 1 50%", minWidth: "0", fontSize: "15px", fontWeight: "600", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" });
                 Object.assign(right.style, { flex: "1 1 50%", minWidth: "0", fontSize: "15px", color: "#d1d9da", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" });
                 row.appendChild(left); row.appendChild(right);
-                row.addEventListener("mouseenter", () => row.style.background = "#263235");
-                row.addEventListener("mouseleave", () => row.style.background = "transparent");
-                row.addEventListener("click", async () => {
+                const refreshRowSelection = () => {
+                    const selected = selectedOriginals.has(original);
+                    row.style.background = selected ? "#2459a6" : "transparent";
+                    row.style.color = selected ? "#ffffff" : "";
+                    left.style.color = selected ? "#ffffff" : "";
+                    right.style.color = selected ? "#eaf2ff" : "#d1d9da";
+                    row.setAttribute("aria-selected", selected ? "true" : "false");
+                };
+                row._selectionOriginal = original;
+                row._refreshSelection = refreshRowSelection;
+                row.addEventListener("mouseenter", () => {
+                    if (!selectedOriginals.has(original)) row.style.background = "#263235";
+                });
+                row.addEventListener("mouseleave", () => {
+                    refreshRowSelection();
+                });
+                row.addEventListener("click", async (event) => {
+                    const isRange = event.shiftKey;
+                    const isToggle = event.ctrlKey || event.metaKey;
+                    if (isRange || isToggle) {
+                        const visibleRows = rows.filter(r => r.el.style.display !== "none");
+                        const clickedIndex = visibleRows.findIndex(r => r.original === original);
+                        if (isRange && lastSelectedOriginal !== null) {
+                            const anchorIndex = visibleRows.findIndex(r => r.original === lastSelectedOriginal);
+                            if (anchorIndex >= 0 && clickedIndex >= 0) {
+                                const start = Math.min(anchorIndex, clickedIndex);
+                                const end = Math.max(anchorIndex, clickedIndex);
+                                for (let i = start; i <= end; i++) selectedOriginals.add(visibleRows[i].original);
+                            } else {
+                                selectedOriginals.add(original);
+                            }
+                        } else if (isToggle) {
+                            if (selectedOriginals.has(original)) selectedOriginals.delete(original);
+                            else selectedOriginals.add(original);
+                        }
+                        lastSelectedOriginal = original;
+                        rows.forEach(r => r._refreshSelection?.());
+                        updateSelectedCount();
+                        return;
+                    }
+
+                    selectedOriginals.clear();
+                    selectedOriginals.add(original);
+                    lastSelectedOriginal = original;
+                    rows.forEach(r => r._refreshSelection?.());
+                    updateSelectedCount();
+
                     const payload = buildJListSelectBlock(block, original);
                     const ok = await copyToClipboard(JSON.stringify(payload, null, 2));
                     if (ok) {
                         row.style.background = "#345047";
-                        setTimeout(() => { if (row.isConnected) row.style.background = "transparent"; }, 180);
+                        setTimeout(() => { if (row.isConnected) row._refreshSelection?.(); }, 180);
                     } else {
                         alert(getPortalLanguage() === "ja" ? "クリップボードへのコピーに失敗しました。" : "Failed to copy to clipboard.");
                     }
                 });
                 list.appendChild(row);
                 const searchText = `${japanese} ${original}`;
-                rows.push({ el: row, searchText: searchText.toLocaleLowerCase(displayMode === "enja" ? "en" : "ja") });
+                rows.push({ el: row, original, searchText: searchText.toLocaleLowerCase(displayMode === "enja" ? "en" : "ja"), _refreshSelection: refreshRowSelection });
+                refreshRowSelection();
             }
             let visible = 0;
             for (const row of rows) {
@@ -1098,7 +1156,34 @@
             }
             empty.style.display = visible ? "none" : "block";
             countLabel.textContent = `${sorted.length} items`;
+            updateSelectedCount();
         };
+
+        function updateSelectedCount() {
+            const selectedCount = selectedOriginals.size;
+            copySelectedButton.textContent = `Copy selected (${selectedCount})`;
+            copySelectedButton.style.opacity = selectedCount ? "1" : "0.55";
+            copySelectedButton.style.cursor = selectedCount ? "pointer" : "default";
+            countLabel.textContent = `${rows.length ? sortedPairs().length : 0} items · ${selectedCount} selected`;
+            rows.forEach(r => r._refreshSelection?.());
+        }
+
+        copySelectedButton.addEventListener("mouseenter", () => {
+            if (selectedOriginals.size) copySelectedButton.style.background = "#303b3d";
+        });
+        copySelectedButton.addEventListener("mouseleave", () => copySelectedButton.style.background = "#20282a");
+        copySelectedButton.addEventListener("click", async () => {
+            if (!selectedOriginals.size) return;
+            const selected = sortedPairs().filter(pair => selectedOriginals.has(normalize(pair.original || pair.display)));
+            const text = selected.map(pair => JSON.stringify(buildJListSelectBlock(block, normalize(pair.original || pair.display)), null, 2)).join("\n");
+            const ok = await copyToClipboard(text);
+            if (ok) {
+                copySelectedButton.textContent = `Copied ${selected.length}`;
+                setTimeout(() => updateSelectedCount(), 700);
+            } else {
+                alert(getPortalLanguage() === "ja" ? "クリップボードへのコピーに失敗しました。" : "Failed to copy to clipboard.");
+            }
+        });
 
         displayButton.addEventListener("mouseenter", () => displayButton.style.background = "#303b3d");
         displayButton.addEventListener("mouseleave", () => displayButton.style.background = "#20282a");
