@@ -659,82 +659,112 @@
     async function translateNames(names, progressBar = null) {
         const unique = [...new Set(names.map(normalize).filter(Boolean))];
         const translated = new Map();
-        const cacheKey = "selectionListTranslationCache_v1";
+
+        // Selection-list names such as:
+        //   CarSedan_01_Door_RearRight
+        // must NOT be sent to the translator as one phrase.  Each "_"-
+        // separated component is translated independently and then the
+        // original separators are restored.
+        const cacheKey = "selectionListTranslationCache_v2_parts";
         let cache = {};
         try { cache = JSON.parse(localStorage.getItem(cacheKey) || "{}"); } catch (_) { cache = {}; }
 
-        const pending = [];
+        const partsForName = name => String(name).split("_");
+        const partKeys = new Set();
         for (const name of unique) {
-            if (cache && typeof cache[name] === "string" && cache[name]) translated.set(name, cache[name]);
-            else pending.push(name);
-        }
-
-        const BATCH_CHARS = 1200;
-        const batches = [];
-        let batch = [];
-        let length = 0;
-        for (const name of pending) {
-            const extra = name.length + 1;
-            if (batch.length && length + extra > BATCH_CHARS) {
-                batches.push(batch);
-                batch = [];
-                length = 0;
+            for (const part of partsForName(name)) {
+                if (part) partKeys.add(part);
             }
-            batch.push(name);
-            length += extra;
         }
-        if (batch.length) batches.push(batch);
 
-        const progressTotal = pending.length;
+        const pendingParts = [];
+        for (const part of partKeys) {
+            if (typeof cache[part] === "string" && cache[part]) {
+                continue;
+            }
+            pendingParts.push(part);
+        }
+
+        const progressTotal = pendingParts.length;
         let progressDone = 0;
         if (progressBar) {
             updateLoadingStatus(progressBar, 0, progressTotal);
             await yieldToUI();
         }
 
+        // Translate individual "_" components.  Batching is still used for
+        // efficiency, but every component is separated by a newline so the
+        // translation endpoint never sees the original compound identifier.
+        const BATCH_CHARS = 1200;
+        const batches = [];
+        let batch = [];
+        let length = 0;
+        for (const part of pendingParts) {
+            const extra = part.length + 1;
+            if (batch.length && length + extra > BATCH_CHARS) {
+                batches.push(batch);
+                batch = [];
+                length = 0;
+            }
+            batch.push(part);
+            length += extra;
+        }
+        if (batch.length) batches.push(batch);
+
         const translateOneBatch = async sourceBatch => {
-            const source = sourceBatch.join("\n");
             try {
+                const source = sourceBatch.join("\n");
                 const result = await translateTextBatch(source);
                 const parts = result.split(/\r?\n/);
+
                 if (parts.length === sourceBatch.length) {
-                    sourceBatch.forEach((name, i) => {
-                        const value = String(parts[i] || name).trim();
-                        translated.set(name, value || name);
-                        cache[name] = value || name;
+                    sourceBatch.forEach((part, i) => {
+                        const value = String(parts[i] || part).trim() || part;
+                        cache[part] = value;
                     });
                     progressDone += sourceBatch.length;
-                    if (progressBar) { updateLoadingStatus(progressBar, progressDone, progressTotal); await yieldToUI(); }
+                    if (progressBar) {
+                        updateLoadingStatus(progressBar, progressDone, progressTotal);
+                        await yieldToUI();
+                    }
                     return;
                 }
             } catch (_) {}
 
-            // If a batch response cannot be mapped 1:1, retry the batch entries
-            // individually. This is only a fallback; normal operation stays batched.
-            for (const name of sourceBatch) {
+            // If newline mapping is unreliable, retry each component alone.
+            for (const part of sourceBatch) {
                 try {
-                    const value = String(await translateTextBatch(name)).trim() || name;
-                    translated.set(name, value);
-                    cache[name] = value;
+                    const value = String(await translateTextBatch(part)).trim() || part;
+                    cache[part] = value;
                 } catch (_) {
-                    translated.set(name, name);
-                    cache[name] = name;
+                    cache[part] = part;
                 }
                 progressDone++;
-                if (progressBar) { updateLoadingStatus(progressBar, progressDone, progressTotal); await yieldToUI(); }
+                if (progressBar) {
+                    updateLoadingStatus(progressBar, progressDone, progressTotal);
+                    await yieldToUI();
+                }
             }
         };
 
-        // A small amount of concurrency keeps large lists practical without
-        // hammering the public translation endpoint with hundreds of requests.
+        // A small amount of concurrency keeps large lists practical.
         for (let i = 0; i < batches.length; i += 3) {
             await Promise.all(batches.slice(i, i + 3).map(translateOneBatch));
         }
 
+        // Reassemble each original identifier with "_" unchanged.
+        for (const name of unique) {
+            const translatedParts = partsForName(name).map(part => {
+                if (!part) return "";
+                return typeof cache[part] === "string" && cache[part] ? cache[part] : part;
+            });
+            translated.set(name, translatedParts.join("_"));
+        }
+
         try { localStorage.setItem(cacheKey, JSON.stringify(cache)); } catch (_) {}
+
         return names.map(name => translated.get(normalize(name)) || normalize(name));
     }
-
 
     function extractSelectionItemPairs(block) {
         const result = [];
