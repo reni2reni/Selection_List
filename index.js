@@ -733,6 +733,29 @@
         if (!Array.isArray(data) || !Array.isArray(data[0])) throw new Error("Unexpected translation response");
         return data[0].map(part => Array.isArray(part) ? String(part[0] || "") : "").join("");
     }
+ 
+    // ============================================================
+    // 翻訳後の一括補正
+    // ここに誤訳・固有名詞・カタカナ表記などの修正を追加する
+    // ============================================================
+    const TRANSLATION_CORRECTIONS = {
+        "OnPlayerDeployed": "オンプレイヤーデプロイド",
+        "OnPlayerDied": "オンプレイヤーダイド",
+        "OnPlayerSpawned": "オンプレイヤースポーンド",
+        "CapturePoint": "キャプチャーポイント",
+    };
+
+    function applyTranslationCorrections(original, translated) {
+        const source = String(original || "").trim();
+        const result = String(translated || "").trim();
+
+        // 元の文字列そのものに対する完全一致
+        if (Object.prototype.hasOwnProperty.call(TRANSLATION_CORRECTIONS, source)) {
+            return TRANSLATION_CORRECTIONS[source];
+        }
+
+        return result || source;
+    }
 
     function shouldKeepTranslationToken(token) {
         return /^[A-Za-z]$/.test(String(token || '').trim());
