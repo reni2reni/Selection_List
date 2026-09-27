@@ -1383,7 +1383,7 @@
         const progressBar = !ruleMode && originals.length > 256 ? createLoadingStatus(originals.length) : null;
         if (progressBar) updateLoadingStatus(progressBar, 0, originals.length);
         try {
-            const translated = ruleMode ? originals : await translateNames(originals, progressBar);
+            const translated = await translateNames(originals, progressBar);
             if (progressBar) removeLoadingStatus(progressBar);
             const translatedMap = new Map();
             originals.forEach((name, i) => translatedMap.set(normalize(name), translated[i] || name));
