@@ -771,6 +771,97 @@
         return names.map(name => translated.get(normalize(name)) || normalize(name));
     }
 
+    // EVENTTYPE identifiers are usually CamelCase (e.g. OnPlayerEnterCapturePoint).
+    // Keep the original identifier for display/copy, but insert spaces at word
+    // boundaries only for the translation request so the translator can
+    // understand the individual English words.
+    function splitCamelCaseForTranslation(value) {
+        const text = normalize(value);
+        if (!text) return "";
+        return text
+            .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+            .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+            .replace(/([A-Za-z])([0-9]+)/g, "$1 $2")
+            .replace(/([0-9]+)([A-Za-z])/g, "$1 $2")
+            .replace(/\s+/g, " ")
+            .trim();
+    }
+
+    async function translateEventTypeNames(names, progressBar = null) {
+        const unique = [...new Set(names.map(normalize).filter(Boolean))];
+        const translated = new Map();
+        const cacheKey = "selectionListTranslationCache_v3_eventtype_camel";
+        let cache = {};
+        try { cache = JSON.parse(localStorage.getItem(cacheKey) || "{}"); } catch (_) { cache = {}; }
+
+        const pending = unique.filter(name => typeof cache[name] !== "string" || !cache[name]);
+        const total = pending.length;
+        let done = 0;
+        if (progressBar) {
+            updateLoadingStatus(progressBar, 0, total);
+            await yieldToUI();
+        }
+
+        const BATCH_CHARS = 1200;
+        const batches = [];
+        let batch = [];
+        let length = 0;
+        for (const name of pending) {
+            const source = splitCamelCaseForTranslation(name);
+            const extra = source.length + 1;
+            if (batch.length && length + extra > BATCH_CHARS) {
+                batches.push(batch);
+                batch = [];
+                length = 0;
+            }
+            batch.push({ name, source });
+            length += extra;
+        }
+        if (batch.length) batches.push(batch);
+
+        const translateBatch = async sourceBatch => {
+            try {
+                const source = sourceBatch.map(item => item.source).join("\n");
+                const result = await translateTextBatch(source);
+                const parts = result.split(/\r?\n/);
+                if (parts.length === sourceBatch.length) {
+                    sourceBatch.forEach((item, i) => {
+                        const value = String(parts[i] || "").trim();
+                        cache[item.name] = value || item.name;
+                    });
+                    done += sourceBatch.length;
+                    if (progressBar) {
+                        updateLoadingStatus(progressBar, done, total);
+                        await yieldToUI();
+                    }
+                    return;
+                }
+            } catch (_) {}
+
+            for (const item of sourceBatch) {
+                try {
+                    const value = String(await translateTextBatch(item.source)).trim();
+                    cache[item.name] = value || item.name;
+                } catch (_) {
+                    cache[item.name] = item.name;
+                }
+                done++;
+                if (progressBar) {
+                    updateLoadingStatus(progressBar, done, total);
+                    await yieldToUI();
+                }
+            }
+        };
+
+        for (let i = 0; i < batches.length; i += 3) {
+            await Promise.all(batches.slice(i, i + 3).map(translateBatch));
+        }
+
+        for (const name of unique) translated.set(name, cache[name] || name);
+        try { localStorage.setItem(cacheKey, JSON.stringify(cache)); } catch (_) {}
+        return names.map(name => translated.get(normalize(name)) || normalize(name));
+    }
+
     function extractSelectionItemPairs(block) {
         const result = [];
         const seen = new Set();
@@ -1383,7 +1474,9 @@
         const progressBar = !ruleMode && originals.length > 256 ? createLoadingStatus(originals.length) : null;
         if (progressBar) updateLoadingStatus(progressBar, 0, originals.length);
         try {
-            const translated = await translateNames(originals, progressBar);
+            const translated = ruleMode
+                ? await translateEventTypeNames(originals, progressBar)
+                : await translateNames(originals, progressBar);
             if (progressBar) removeLoadingStatus(progressBar);
             const translatedMap = new Map();
             originals.forEach((name, i) => translatedMap.set(normalize(name), translated[i] || name));
