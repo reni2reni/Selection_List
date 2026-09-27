@@ -743,7 +743,7 @@
     // translator itself. Exact matches take priority over API results.
     const TRANSLATION_CORRECTIONS = {
         "OnPlayerDeployed": "プレイヤーが出撃した",
-        "OnPlayerUnDeploy": "プレイヤーが出撃してない",
+        "OnPlayerUnDeploy": "プレイヤーが出撃してない"
     };
 
     function applyTranslationCorrection(original, translated) {
@@ -855,7 +855,7 @@
             const translatedParts = partsForName(name).map(part => {
                 if (!part) return "";
                 if (shouldKeepTranslationToken(part)) return part;
-                return typeof cache[part] === "string" && cache[part] ? cache[part] : part;
+                return applyTranslationCorrection(part, typeof cache[part] === "string" && cache[part] ? cache[part] : part);
             });
             translated.set(name, translatedParts.join("_"));
         }
@@ -955,7 +955,7 @@
         }
 
         for (const name of unique) {
-            if (!translated.has(name)) translated.set(name, cache[name] || name);
+            if (!translated.has(name)) translated.set(name, applyTranslationCorrection(name, cache[name] || name));
         }
         try { localStorage.setItem(cacheKey, JSON.stringify(cache)); } catch (_) {}
         return names.map(name => translated.get(normalize(name)) || normalize(name));
