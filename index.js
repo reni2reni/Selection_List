@@ -733,32 +733,25 @@
         if (!Array.isArray(data) || !Array.isArray(data[0])) throw new Error("Unexpected translation response");
         return data[0].map(part => Array.isArray(part) ? String(part[0] || "") : "").join("");
     }
- 
-    // ============================================================
-    // 翻訳後の一括補正
-    // ここに誤訳・固有名詞・カタカナ表記などの修正を追加する
-    // ============================================================
-    const TRANSLATION_CORRECTIONS = {
-        "OnPlayerDeployed": "オンプレイヤーデプロイド",
-        "OnPlayerDied": "オンプレイヤーダイド",
-        "OnPlayerSpawned": "オンプレイヤースポーンド",
-        "CapturePoint": "キャプチャーポイント",
-    };
-
-    function applyTranslationCorrections(original, translated) {
-        const source = String(original || "").trim();
-        const result = String(translated || "").trim();
-
-        // 元の文字列そのものに対する完全一致
-        if (Object.prototype.hasOwnProperty.call(TRANSLATION_CORRECTIONS, source)) {
-            return TRANSLATION_CORRECTIONS[source];
-        }
-
-        return result || source;
-    }
 
     function shouldKeepTranslationToken(token) {
         return /^[A-Za-z]$/.test(String(token || '').trim());
+    }
+
+    // Translation corrections: apply these AFTER the translation service.
+    // Add known BF6 identifiers / terminology here instead of changing the
+    // translator itself. Exact matches take priority over API results.
+    const TRANSLATION_CORRECTIONS = {
+        "OnPlayerDeployed": "プレイヤーが出撃した",
+        "OnPlayerUnDeploy": "プレイヤーが出撃してない",
+    };
+
+    function applyTranslationCorrection(original, translated) {
+        const source = normalize(original);
+        if (Object.prototype.hasOwnProperty.call(TRANSLATION_CORRECTIONS, source)) {
+            return TRANSLATION_CORRECTIONS[source];
+        }
+        return normalize(translated) || source;
     }
 
     async function translateNames(names, progressBar = null) {
@@ -825,7 +818,7 @@
                 if (parts.length === sourceBatch.length) {
                     sourceBatch.forEach((part, i) => {
                         const value = String(parts[i] || part).trim() || part;
-                        cache[part] = value;
+                        cache[part] = applyTranslationCorrection(part, value);
                     });
                     progressDone += sourceBatch.length;
                     if (progressBar) {
@@ -840,7 +833,7 @@
             for (const part of sourceBatch) {
                 try {
                     const value = String(await translateTextBatch(part)).trim() || part;
-                    cache[part] = value;
+                    cache[part] = applyTranslationCorrection(part, value);
                 } catch (_) {
                     cache[part] = part;
                 }
@@ -931,7 +924,7 @@
                 if (parts.length === sourceBatch.length) {
                     sourceBatch.forEach((item, i) => {
                         const value = String(parts[i] || "").trim();
-                        cache[item.name] = value || item.name;
+                        cache[item.name] = applyTranslationCorrection(item.name, value || item.name);
                     });
                     done += sourceBatch.length;
                     if (progressBar) {
@@ -945,9 +938,9 @@
             for (const item of sourceBatch) {
                 try {
                     const value = String(await translateTextBatch(item.source)).trim();
-                    cache[item.name] = value || item.name;
+                    cache[item.name] = applyTranslationCorrection(item.name, value || item.name);
                 } catch (_) {
-                    cache[item.name] = item.name;
+                    cache[item.name] = applyTranslationCorrection(item.name, item.name);
                 }
                 done++;
                 if (progressBar) {
