@@ -1,7 +1,7 @@
 {
   "id": "Selection_List",
   "name": "Selection_List",
-  "version": "1.0.0",
+  "version": "1.3.0",
   "description": "Export Selection List item names from BF2042 Portal to a text file",
   "author": "reni2",
   "main": "index.js"
