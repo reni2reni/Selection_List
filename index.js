@@ -742,8 +742,7 @@
     // Add known BF6 identifiers / terminology here instead of changing the
     // translator itself. Exact matches take priority over API results.
     const TRANSLATION_CORRECTIONS = {
-        "OnPlayerDeployed": "プレイヤーが出撃した",
-        "OnPlayerUnDeploy": "プレイヤーが出撃してない"
+        "OnPlayerDeployed": "プレイヤーがデプロイ時",
     };
 
     function applyTranslationCorrection(original, translated) {
