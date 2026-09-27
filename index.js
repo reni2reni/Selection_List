@@ -951,7 +951,7 @@
         return root;
     }
 
-    function buildJListSelectBlock(block, originalName, copyIndex = 0) {
+    function buildJListSelectBlock(block, originalName, copyIndex = 0, targetFieldName = "VALUE-1") {
         const Blockly = getWorkspace() ? (_Blockly || window.Blockly) : (_Blockly || window.Blockly);
         let data = null;
         try {
@@ -970,15 +970,15 @@
         // シリアライズ結果をそのまま維持する。
         const wanted = normalize(originalName);
         let changed = false;
-        if (data.fields && Object.prototype.hasOwnProperty.call(data.fields, "VALUE-1")) {
-            data.fields["VALUE-1"] = wanted;
+        if (data.fields && Object.prototype.hasOwnProperty.call(data.fields, targetFieldName)) {
+            data.fields[targetFieldName] = wanted;
             changed = true;
         }
         const walkFields = obj => {
             if (!obj || typeof obj !== "object") return;
             if (Array.isArray(obj)) { obj.forEach(walkFields); return; }
-            if (obj.fields && typeof obj.fields === "object" && Object.prototype.hasOwnProperty.call(obj.fields, "VALUE-1")) {
-                obj.fields["VALUE-1"] = wanted;
+            if (obj.fields && typeof obj.fields === "object" && Object.prototype.hasOwnProperty.call(obj.fields, targetFieldName)) {
+                obj.fields[targetFieldName] = wanted;
                 changed = true;
             }
             for (const v of Object.values(obj)) walkFields(v);
@@ -1030,8 +1030,12 @@
         Object.assign(titleRow.style, { display: "flex", alignItems: "center", gap: "10px", marginBottom: "9px" });
         const title = document.createElement("div");
         const blockTypeName = normalize(block?.type || "");
-        title.textContent = blockTypeName ? `List → JlistSelect  |  ${blockTypeName}` : "List → JlistSelect";
-        title.title = blockTypeName || "List → JlistSelect";
+        const ruleMode = isRuleBlock(block);
+        const ruleEventType = ruleMode ? getRuleEventType(block) : "";
+        title.textContent = ruleMode
+            ? `List → JlistSelect  |  EVENTTYPE: ${ruleEventType} イベントタイプのみの検索`
+            : (blockTypeName ? `List → JlistSelect  |  ${blockTypeName}` : "List → JlistSelect");
+        title.title = ruleMode ? `EVENTTYPE: ${ruleEventType}` : (blockTypeName || "List → JlistSelect");
         Object.assign(title.style, { fontSize: "18px", fontWeight: "700", flex: "1", cursor: "move", userSelect: "none", minWidth: "0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" });
 
         const displayButton = document.createElement("button");
@@ -1151,8 +1155,8 @@
             enja: "Display: English | Japanese"
         };
         const modePlaceholders = {
-            jaen: "Search Japanese / original name…",
-            enja: "Search original name / Japanese…"
+            jaen: ruleMode ? `EVENTTYPE: ${ruleEventType} のみ検索…` : "Search Japanese / original name…",
+            enja: ruleMode ? `Search only EVENTTYPE: ${ruleEventType}…` : "Search original name / Japanese…"
         };
         const updateDisplay = () => {
             displayButton.textContent = modeLabels[displayMode];
@@ -1225,7 +1229,7 @@
                     rows.forEach(r => r._refreshSelection?.());
                     updateSelectedCount();
 
-                    const payload = buildJListSelectBlock(block, original, 0);
+                    const payload = buildJListSelectBlock(block, original, 0, isRuleBlock(block) ? "EVENTTYPE" : "VALUE-1");
                     const ok = await copyToClipboard(JSON.stringify(payload, null, 2));
                     if (ok) {
                         row.style.background = "#345047";
@@ -1272,7 +1276,7 @@
             // JSONオブジェクトを単純に改行連結すると貼り付け時にJSON.parseできないため、
             // _bf6MultiBlockClipboard の blocks 配列へまとめる。
             const blocks = selected
-                .map((pair, index) => buildJListSelectBlock(block, normalize(pair.original || pair.display), index))
+                .map((pair, index) => buildJListSelectBlock(block, normalize(pair.original || pair.display), index, isRuleBlock(block) ? "EVENTTYPE" : "VALUE-1"))
                 .filter(Boolean);
             if (!blocks.length) return;
 
@@ -1369,16 +1373,17 @@
             alert(getPortalLanguage() === "ja" ? "右クリックしたブロックを取得できませんでした。" : "Could not get the context block.");
             return;
         }
-        const pairs = extractSelectionItemPairs(block);
+        const ruleMode = isRuleBlock(block);
+        const pairs = ruleMode ? extractRuleEventTypePairs(block) : extractSelectionItemPairs(block);
         if (!pairs.length) {
-            alert(getPortalLanguage() === "ja" ? "選択リストの候補を取得できませんでした。" : "No selection-list options could be found on this block.");
+            alert(getPortalLanguage() === "ja" ? "対象ブロックの候補を取得できませんでした。" : "No list options could be found on this block.");
             return;
         }
         const originals = pairs.map(p => normalize(p.original || p.display)).filter(Boolean);
-        const progressBar = originals.length > 256 ? createLoadingStatus(originals.length) : null;
+        const progressBar = !ruleMode && originals.length > 256 ? createLoadingStatus(originals.length) : null;
         if (progressBar) updateLoadingStatus(progressBar, 0, originals.length);
         try {
-            const translated = await translateNames(originals, progressBar);
+            const translated = ruleMode ? originals : await translateNames(originals, progressBar);
             if (progressBar) removeLoadingStatus(progressBar);
             const translatedMap = new Map();
             originals.forEach((name, i) => translatedMap.set(normalize(name), translated[i] || name));
@@ -1390,7 +1395,7 @@
         } catch (error) {
             if (progressBar) removeLoadingStatus(progressBar);
             console.error("Selection_List JlistSelect failed", error);
-            alert(getPortalLanguage() === "ja" ? "日本語リストの作成に失敗しました。" : "Failed to create the Japanese list.");
+            alert(getPortalLanguage() === "ja" ? "JListSelectの表示に失敗しました。" : "Failed to open JListSelect.");
         }
     }
 
@@ -1456,6 +1461,39 @@
         return lastContextBlock || getBlockFromId(lastContextBlockId);
     }
 
+    // Rule blocks: use the current EVENTTYPE only (e.g. OnPlayerDeployed).
+    // This keeps the plugin focused on the event currently configured on the rule block.
+    function isRuleBlock(block) {
+        if (!block) return false;
+        try {
+            const field = block.getField?.("EVENTTYPE");
+            return !!field;
+        } catch (_) { return false; }
+    }
+
+    function getRuleEventType(block) {
+        return getFieldText(block, "EVENTTYPE");
+    }
+
+    function extractRuleEventTypePairs(block) {
+        const eventType = getRuleEventType(block);
+        if (!eventType) return [];
+        return [{ original: eventType, display: eventType, japanese: eventType }];
+    }
+
+    function getContextListData() {
+        const block = getCurrentContextBlock();
+        if (!block) return null;
+        if (isRuleBlock(block)) {
+            const eventType = getRuleEventType(block);
+            if (!eventType) return null;
+            return { block, names: [eventType], pairs: extractRuleEventTypePairs(block), rule: true, eventType };
+        }
+        const names = extractSelectionItems(block);
+        if (!names.length) return null;
+        return { block, names, pairs: extractSelectionItemPairs(block), rule: false };
+    }
+
     function getNamesOrAlert() {
         const block = getCurrentContextBlock();
         if (!block) {
@@ -1476,6 +1514,7 @@
 
     function isSelectionListBlock(block) {
         if (!block) return false;
+        if (isRuleBlock(block)) return true;
         const type = normalize(block.type);
         if (/Item$/i.test(type)) {
             const names = extractSelectionItems(block);
@@ -1532,7 +1571,8 @@
 
         // Build all three entries before attaching the panel. This avoids
         // PORTAL's MutationObserver reacting between individual insertions.
-        const entries = [
+        const ruleMode = isRuleBlock(getCurrentContextBlock());
+        const entries = ruleMode ? [
             menuItem("List → JlistSelect", async (event) => {
                 try {
                     event?.preventDefault?.();
@@ -1540,9 +1580,30 @@
                     event?.stopImmediatePropagation?.();
                 } catch (_) {}
                 setTimeout(() => {
-                    openJListSelectFromContext().catch(error => {
-                        console.error("Selection_List JlistSelect failed", error);
-                    });
+                    openJListSelectFromContext().catch(error => console.error("Selection_List JlistSelect failed", error));
+                }, 0);
+            }),
+            menuItem("ListName → File", () => {
+                const data = getContextListData();
+                if (!data) return;
+                exportTextFile(data.block, data.names);
+                removeFloatingMenu();
+            }),
+            menuItem("ListName → File (E,J)", async () => {
+                const data = getContextListData();
+                if (!data) return;
+                await exportTranslatedTextFile(data.block, data.names);
+                removeFloatingMenu();
+            })
+        ] : [
+            menuItem("List → JlistSelect", async (event) => {
+                try {
+                    event?.preventDefault?.();
+                    event?.stopPropagation?.();
+                    event?.stopImmediatePropagation?.();
+                } catch (_) {}
+                setTimeout(() => {
+                    openJListSelectFromContext().catch(error => console.error("Selection_List JlistSelect failed", error));
                 }, 0);
             }),
             menuItem("List → array", async () => {
