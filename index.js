@@ -622,6 +622,79 @@
         return { id: "", name, type: "Global" };
     }
 
+    function copyViaPortalNative(block, names, targetFieldName = "VALUE-1") {
+        const ws = getWorkspace();
+        const Blockly = _Blockly || window.Blockly;
+        if (!ws || !Blockly?.serialization?.blocks?.append || !block || !Array.isArray(names) || !names.length) return false;
+
+        const tempBlocks = [];
+        let eventsDisabled = false;
+        try {
+            if (Blockly.Events?.disable) {
+                Blockly.Events.disable();
+                eventsDisabled = true;
+            }
+
+            const base = cloneJson(Blockly.serialization.blocks.save(block));
+            if (!base) return false;
+            try { if (base.next) delete base.next; } catch (_) {}
+
+            for (let i = 0; i < names.length; i++) {
+                const data = cloneJson(base);
+                if (!data) continue;
+                const wanted = normalize(names[i]);
+                let changed = false;
+                if (data.fields && Object.prototype.hasOwnProperty.call(data.fields, targetFieldName)) {
+                    data.fields[targetFieldName] = wanted;
+                    changed = true;
+                }
+                const walkFields = obj => {
+                    if (!obj || typeof obj !== "object") return;
+                    if (Array.isArray(obj)) { obj.forEach(walkFields); return; }
+                    if (obj.fields && typeof obj.fields === "object" && Object.prototype.hasOwnProperty.call(obj.fields, targetFieldName)) {
+                        obj.fields[targetFieldName] = wanted;
+                        changed = true;
+                    }
+                    for (const v of Object.values(obj)) walkFields(v);
+                };
+                if (!changed) walkFields(data);
+                remapSerializedIds(data, `JListNative${i}`);
+
+                // 一時ブロックは画面外へ置き、貼り付け位置は本体側に任せる。
+                try {
+                    if (data.x !== undefined) delete data.x;
+                    if (data.y !== undefined) delete data.y;
+                    if (data._bf6Position) delete data._bf6Position;
+                } catch (_) {}
+
+                const created = Blockly.serialization.blocks.append(data, ws);
+                if (created) tempBlocks.push(created);
+            }
+
+            if (!tempBlocks.length) return false;
+
+            // ここが重要：プラグイン独自のJSONクリップボードではなく、
+            // 本体が通常の「Copy」で使っている copy-block 経路を呼び出す。
+            window.dispatchEvent(new CustomEvent("bf6-experience-manager-action", {
+                detail: {
+                    action: "copy-block",
+                    blockId: tempBlocks[0].id,
+                    selectedBlockIds: tempBlocks.map(b => String(b.id))
+                }
+            }));
+            return true;
+        } catch (error) {
+            console.error("[Selection_List] native copy failed", error);
+            return false;
+        } finally {
+            for (const temp of tempBlocks) {
+                try { temp.dispose?.(true, true); } catch (_) {}
+            }
+            if (eventsDisabled && Blockly.Events?.enable) Blockly.Events.enable();
+            try { ws.resizeContents?.(); } catch (_) {}
+        }
+    }
+
     async function copyPayloadAndAlert(block, payload, message) {
         const text = JSON.stringify(payload, null, 2);
         const ok = await copyToClipboard(text);
@@ -1330,8 +1403,7 @@
                     rows.forEach(r => r._refreshSelection?.());
                     updateSelectedCount();
 
-                    const payload = buildJListSelectBlock(block, original, 0, isRuleBlock(block) ? "EVENTTYPE" : "VALUE-1");
-                    const ok = await copyToClipboard(JSON.stringify(payload, null, 2));
+                    const ok = copyViaPortalNative(block, [original], isRuleBlock(block) ? "EVENTTYPE" : "VALUE-1");
                     if (ok) {
                         row.style.background = "#345047";
                         setTimeout(() => { if (row.isConnected) row._refreshSelection?.(); }, 180);
@@ -1373,29 +1445,15 @@
             const selected = sortedPairs().filter(pair => selectedOriginals.has(normalize(pair.original || pair.display)));
             if (!selected.length) return;
 
-            // Portal本体が扱う複数ブロック形式にする。
-            // JSONオブジェクトを単純に改行連結すると貼り付け時にJSON.parseできないため、
-            // _bf6MultiBlockClipboard の blocks 配列へまとめる。
-            const blocks = selected
-                .map((pair, index) => buildJListSelectBlock(block, normalize(pair.original || pair.display), index, isRuleBlock(block) ? "EVENTTYPE" : "VALUE-1"))
-                .filter(Boolean);
-            if (!blocks.length) return;
-
-            const payload = blocks.length === 1
-                ? blocks[0]
-                : {
-                    _bf6MultiBlockClipboard: 1,
-                    blocks,
-                    sourceIds: blocks.map((_, i) => `JListSelect_${i}`),
-                    connections: []
-                };
-
-            const ok = await copyToClipboard(JSON.stringify(payload, null, 2));
+            // 複数コピーも本体の通常Copy処理を利用する。
+            // Selection_List独自の _bf6MultiBlockClipboard は生成しない。
+            const names = selected.map(pair => normalize(pair.original || pair.display));
+            const ok = copyViaPortalNative(block, names, isRuleBlock(block) ? "EVENTTYPE" : "VALUE-1");
             if (ok) {
                 copySelectedButton.textContent = `COPY済み (${selected.length})`;
                 setTimeout(() => updateSelectedCount(), 1000);
             } else {
-                alert(getPortalLanguage() === "ja" ? "クリップボードへのコピーに失敗しました。" : "Failed to copy to clipboard.");
+                alert(getPortalLanguage() === "ja" ? "本体のコピー処理を呼び出せませんでした。" : "Could not invoke the portal's native copy handler.");
             }
         });
 
