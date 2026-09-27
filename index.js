@@ -457,24 +457,29 @@
     }
 
     async function copyToClipboard(text) {
+        // 本体を変更せず、ブラウザ標準のクリップボードへ書き込む。
+        // 中身は本体の copy-block と同じ Blockly serialization 形式なので、
+        // 本体の通常のPaste処理でそのまま扱える。
+        const value = String(text ?? "");
         try {
             if (navigator.clipboard?.writeText) {
-                await navigator.clipboard.writeText(text);
+                await navigator.clipboard.writeText(value);
                 return true;
             }
         } catch (_) {}
         try {
             const ta = document.createElement("textarea");
-            ta.value = text;
+            ta.value = value;
             ta.style.position = "fixed";
             ta.style.left = "-9999px";
-            ta.style.top = "-9999px";
+            ta.style.top = "0";
+            ta.style.opacity = "0";
             document.body.appendChild(ta);
             ta.focus();
             ta.select();
             const ok = document.execCommand("copy");
             ta.remove();
-            return ok;
+            return !!ok;
         } catch (_) {
             return false;
         }
@@ -922,17 +927,64 @@
         });
     }
 
-    function buildJListSelectBlock(block, originalName) {
-        const type = normalize(block?.type);
-        const group = getFieldText(block, "VALUE-0") || type;
-        return {
-            type,
-            id: makeId("JList", Date.now()),
-            fields: {
-                "VALUE-0": group,
-                "VALUE-1": normalize(originalName)
-            }
+    // BF6 ExperienceManager本体のコピー処理と同じく、Blocklyの標準シリアライズ結果を
+    // ベースにする。本体そのものは変更せず、プラグイン側で同じブロックデータを生成する。
+    function cloneJson(value) {
+        try { return JSON.parse(JSON.stringify(value)); } catch (_) { return null; }
+    }
+
+    function remapSerializedIds(root, seed) {
+        const idMap = new Map();
+        const makeUniqueId = oldId => {
+            const key = String(oldId || "");
+            if (!key) return makeId(seed, idMap.size);
+            if (!idMap.has(key)) idMap.set(key, makeId(seed, idMap.size));
+            return idMap.get(key);
         };
+        const visit = value => {
+            if (!value || typeof value !== "object") return;
+            if (Array.isArray(value)) { value.forEach(visit); return; }
+            if (Object.prototype.hasOwnProperty.call(value, "id")) value.id = makeUniqueId(value.id);
+            for (const child of Object.values(value)) visit(child);
+        };
+        visit(root);
+        return root;
+    }
+
+    function buildJListSelectBlock(block, originalName, copyIndex = 0) {
+        const Blockly = getWorkspace() ? (_Blockly || window.Blockly) : (_Blockly || window.Blockly);
+        let data = null;
+        try {
+            data = cloneJson(Blockly?.serialization?.blocks?.save?.(block));
+        } catch (_) {}
+        if (!data) {
+            const type = normalize(block?.type);
+            const group = getFieldText(block, "VALUE-0") || type;
+            data = { type, id: makeId("JList", Date.now() + copyIndex), fields: { "VALUE-0": group, "VALUE-1": normalize(originalName) } };
+        }
+
+        // 本体の copy-block と同じく next はコピー対象から外す。
+        try { if (data && data.next) delete data.next; } catch (_) {}
+
+        // 選択リストの値だけを差し替え、他のフィールド・extraState・mutation等は本体の
+        // シリアライズ結果をそのまま維持する。
+        const wanted = normalize(originalName);
+        let changed = false;
+        if (data.fields && Object.prototype.hasOwnProperty.call(data.fields, "VALUE-1")) {
+            data.fields["VALUE-1"] = wanted;
+            changed = true;
+        }
+        const walkFields = obj => {
+            if (!obj || typeof obj !== "object") return;
+            if (Array.isArray(obj)) { obj.forEach(walkFields); return; }
+            if (obj.fields && typeof obj.fields === "object" && Object.prototype.hasOwnProperty.call(obj.fields, "VALUE-1")) {
+                obj.fields["VALUE-1"] = wanted;
+                changed = true;
+            }
+            for (const v of Object.values(obj)) walkFields(v);
+        };
+        if (!changed) walkFields(data);
+        return remapSerializedIds(data, `JList${copyIndex}`);
     }
 
     async function openJListSelect(block, pairs) {
@@ -1018,6 +1070,45 @@
         titleRow.appendChild(copySelectedButton);
         titleRow.appendChild(countLabel);
         titleRow.appendChild(closeButton);
+
+        let panelCollapsed = false;
+        let titleClickStartX = 0;
+        let titleClickStartY = 0;
+        let titleClickMoved = false;
+        const setPanelCollapsed = collapsed => {
+            panelCollapsed = !!collapsed;
+            search.style.display = panelCollapsed ? "none" : "";
+            list.style.display = panelCollapsed ? "none" : "";
+            resizeStrip.style.display = panelCollapsed ? "none" : "";
+            titleRow.style.marginBottom = panelCollapsed ? "0" : "9px";
+            // 折りたたみ時はタイトルバーだけの高さにする。
+            if (panelCollapsed) {
+                panel.dataset.expandedHeight = panel.style.height || "";
+                panel.style.height = "auto";
+                panel.style.minHeight = "0";
+                panel.style.maxHeight = "none";
+            } else {
+                panel.style.minHeight = "";
+                const savedHeight = panel.dataset.expandedHeight;
+                if (savedHeight) panel.style.height = savedHeight;
+            }
+        };
+        titleRow.addEventListener("mousedown", event => {
+            titleClickStartX = event.clientX;
+            titleClickStartY = event.clientY;
+            titleClickMoved = false;
+        }, true);
+        titleRow.addEventListener("mousemove", event => {
+            if (Math.abs(event.clientX - titleClickStartX) > 4 || Math.abs(event.clientY - titleClickStartY) > 4) {
+                titleClickMoved = true;
+            }
+        }, true);
+        titleRow.addEventListener("click", event => {
+            if (titleClickMoved) return;
+            if (event.target === closeButton || event.target === displayButton || event.target === copySelectedButton) return;
+            // タイトル文字部分をクリックしたら、タイトルバーだけ残して折りたたむ／再表示。
+            setPanelCollapsed(!panelCollapsed);
+        }, false);
 
         const search = document.createElement("input");
         search.type = "search";
@@ -1134,7 +1225,7 @@
                     rows.forEach(r => r._refreshSelection?.());
                     updateSelectedCount();
 
-                    const payload = buildJListSelectBlock(block, original);
+                    const payload = buildJListSelectBlock(block, original, 0);
                     const ok = await copyToClipboard(JSON.stringify(payload, null, 2));
                     if (ok) {
                         row.style.background = "#345047";
@@ -1175,11 +1266,29 @@
         copySelectedButton.addEventListener("click", async () => {
             if (!selectedOriginals.size) return;
             const selected = sortedPairs().filter(pair => selectedOriginals.has(normalize(pair.original || pair.display)));
-            const text = selected.map(pair => JSON.stringify(buildJListSelectBlock(block, normalize(pair.original || pair.display)), null, 2)).join("\n");
-            const ok = await copyToClipboard(text);
+            if (!selected.length) return;
+
+            // Portal本体が扱う複数ブロック形式にする。
+            // JSONオブジェクトを単純に改行連結すると貼り付け時にJSON.parseできないため、
+            // _bf6MultiBlockClipboard の blocks 配列へまとめる。
+            const blocks = selected
+                .map((pair, index) => buildJListSelectBlock(block, normalize(pair.original || pair.display), index))
+                .filter(Boolean);
+            if (!blocks.length) return;
+
+            const payload = blocks.length === 1
+                ? blocks[0]
+                : {
+                    _bf6MultiBlockClipboard: 1,
+                    blocks,
+                    sourceIds: blocks.map((_, i) => `JListSelect_${i}`),
+                    connections: []
+                };
+
+            const ok = await copyToClipboard(JSON.stringify(payload, null, 2));
             if (ok) {
-                copySelectedButton.textContent = `Copied ${selected.length}`;
-                setTimeout(() => updateSelectedCount(), 700);
+                copySelectedButton.textContent = `COPY済み (${selected.length})`;
+                setTimeout(() => updateSelectedCount(), 1000);
             } else {
                 alert(getPortalLanguage() === "ja" ? "クリップボードへのコピーに失敗しました。" : "Failed to copy to clipboard.");
             }
