@@ -1476,18 +1476,69 @@
     }
 
     function extractRuleEventTypePairs(block) {
-        const eventType = getRuleEventType(block);
-        if (!eventType) return [];
-        return [{ original: eventType, display: eventType, japanese: eventType }];
+        if (!block) return [];
+        const field = block.getField?.("EVENTTYPE");
+        if (!field) return [];
+
+        // EVENTTYPE は現在選択されている値ではなく、Blockly の
+        // ドロップダウンが持っている「全イベント候補」を取得する。
+        // 本体の FieldDropdown / menuGenerator が公開している候補を最優先で使う。
+        const raw = [];
+        try {
+            if (typeof field.getOptions === "function") {
+                const options = field.getOptions(false);
+                if (Array.isArray(options)) raw.push(...options);
+            }
+        } catch (_) {}
+        for (const key of ["options_", "options", "menuGenerator_", "menuGenerator", "choices", "values"]) {
+            try {
+                const value = field[key];
+                if (Array.isArray(value)) raw.push(...value);
+                else if (typeof value === "function") {
+                    const generated = value.call(field);
+                    if (Array.isArray(generated)) raw.push(...generated);
+                }
+            } catch (_) {}
+        }
+
+        const result = [];
+        const seen = new Set();
+        for (const option of raw) {
+            let display = "";
+            let value = "";
+            if (Array.isArray(option)) {
+                display = normalize(option[0]);
+                value = normalize(option[1]);
+            } else if (option && typeof option === "object") {
+                display = normalize(option.text || option.label || option.displayName || option.name || option.value);
+                value = normalize(option.value || option.name || option.text || option.label || option.displayName);
+            } else {
+                display = normalize(option);
+                value = display;
+            }
+            value = value || display;
+            display = display || value;
+            if (!value || seen.has(value)) continue;
+            seen.add(value);
+            result.push({ original: value, display, japanese: value });
+        }
+
+        // 本体のフィールド実装によって候補が getOptions() から取れない場合の保険。
+        // この場合だけ現在値を1件として返す。
+        if (!result.length) {
+            const eventType = getRuleEventType(block);
+            if (eventType) result.push({ original: eventType, display: eventType, japanese: eventType });
+        }
+        return result;
     }
 
     function getContextListData() {
         const block = getCurrentContextBlock();
         if (!block) return null;
         if (isRuleBlock(block)) {
-            const eventType = getRuleEventType(block);
-            if (!eventType) return null;
-            return { block, names: [eventType], pairs: extractRuleEventTypePairs(block), rule: true, eventType };
+            const pairs = extractRuleEventTypePairs(block);
+            if (!pairs.length) return null;
+            return { block, names: pairs.map(p => p.original), pairs, rule: true, eventType: getRuleEventType(block) };
         }
         const names = extractSelectionItems(block);
         if (!names.length) return null;
