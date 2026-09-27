@@ -661,6 +661,10 @@
         return data[0].map(part => Array.isArray(part) ? String(part[0] || "") : "").join("");
     }
 
+    function shouldKeepTranslationToken(token) {
+        return /^[A-Za-z]$/.test(String(token || '').trim());
+    }
+
     async function translateNames(names, progressBar = null) {
         const unique = [...new Set(names.map(normalize).filter(Boolean))];
         const translated = new Map();
@@ -678,7 +682,7 @@
         const partKeys = new Set();
         for (const name of unique) {
             for (const part of partsForName(name)) {
-                if (part) partKeys.add(part);
+                if (part && !shouldKeepTranslationToken(part)) partKeys.add(part);
             }
         }
 
@@ -761,6 +765,7 @@
         for (const name of unique) {
             const translatedParts = partsForName(name).map(part => {
                 if (!part) return "";
+                if (shouldKeepTranslationToken(part)) return part;
                 return typeof cache[part] === "string" && cache[part] ? cache[part] : part;
             });
             translated.set(name, translatedParts.join("_"));
@@ -790,11 +795,14 @@
     async function translateEventTypeNames(names, progressBar = null) {
         const unique = [...new Set(names.map(normalize).filter(Boolean))];
         const translated = new Map();
+        for (const name of unique) {
+            if (shouldKeepTranslationToken(name)) translated.set(name, name);
+        }
         const cacheKey = "selectionListTranslationCache_v3_eventtype_camel";
         let cache = {};
         try { cache = JSON.parse(localStorage.getItem(cacheKey) || "{}"); } catch (_) { cache = {}; }
 
-        const pending = unique.filter(name => typeof cache[name] !== "string" || !cache[name]);
+        const pending = unique.filter(name => !shouldKeepTranslationToken(name) && (typeof cache[name] !== "string" || !cache[name]));
         const total = pending.length;
         let done = 0;
         if (progressBar) {
@@ -857,7 +865,9 @@
             await Promise.all(batches.slice(i, i + 3).map(translateBatch));
         }
 
-        for (const name of unique) translated.set(name, cache[name] || name);
+        for (const name of unique) {
+            if (!translated.has(name)) translated.set(name, cache[name] || name);
+        }
         try { localStorage.setItem(cacheKey, JSON.stringify(cache)); } catch (_) {}
         return names.map(name => translated.get(normalize(name)) || normalize(name));
     }
