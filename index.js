@@ -742,7 +742,7 @@
     // Add known BF6 identifiers / terminology here instead of changing the
     // translator itself. Exact matches take priority over API results.
     const TRANSLATION_CORRECTIONS = {
-        "OnPlayerDeployed": "プレイヤーがデプロイ時",
+        "OnPlayerDeployed": "オンプレイヤーデプロイド",
     };
 
     function applyTranslationCorrection(original, translated) {
@@ -1875,6 +1875,152 @@
         return panel;
     }
 
+    // ============================================================
+    // Japanese Help panel
+    // - Uses the portal's native Help dialog as the source of truth.
+    // - Keeps the native DOM structure, description, examples and code.
+    // - Translates only normal text nodes; PRE/CODE text is preserved.
+    // - The portal itself is not modified.
+    // ============================================================
+    let japaneseHelpPanel = null;
+    let helpClickBound = false;
+
+    function isVisibleElement(el) {
+        if (!el || !el.isConnected) return false;
+        const cs = getComputedStyle(el);
+        const r = el.getBoundingClientRect();
+        return cs.display !== "none" && cs.visibility !== "hidden" && r.width > 20 && r.height > 20;
+    }
+
+    function findNativeHelpDialog() {
+        const candidates = [...document.querySelectorAll('[role="dialog"], [class*="help" i], [class*="Help"], [class*="modal" i]')]
+            .filter(isVisibleElement);
+        if (!candidates.length) return null;
+        const scored = candidates.map(el => {
+            const text = normalize(el.innerText || "");
+            let score = 0;
+            if (/example|usage|description|help|説明|使用例|ヘルプ/i.test(text)) score += 10;
+            if (el.matches('[role="dialog"]')) score += 5;
+            if (el.querySelector('pre, code')) score += 4;
+            return { el, score, area: el.getBoundingClientRect().width * el.getBoundingClientRect().height };
+        });
+        scored.sort((a, b) => b.score - a.score || b.area - a.area);
+        return scored[0]?.el || null;
+    }
+
+    function collectTranslatableTextNodes(root) {
+        const nodes = [];
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        let node;
+        while ((node = walker.nextNode())) {
+            const parent = node.parentElement;
+            if (!parent) continue;
+            if (/^(SCRIPT|STYLE|CODE|PRE|TEXTAREA|INPUT|BUTTON)$/.test(parent.tagName)) continue;
+            const text = normalize(node.nodeValue);
+            if (!text || /^[\d\s\-_/.:,()[\]{}]+$/.test(text)) continue;
+            nodes.push(node);
+        }
+        return nodes;
+    }
+
+    async function translateHelpClone(root) {
+        const nodes = collectTranslatableTextNodes(root);
+        const cacheKey = "selectionListHelpTranslationCache_v1";
+        let cache = {};
+        try { cache = JSON.parse(localStorage.getItem(cacheKey) || "{}"); } catch (_) { cache = {}; }
+
+        for (const node of nodes) {
+            const source = normalize(node.nodeValue);
+            if (!source) continue;
+            let translated = cache[source];
+            if (!translated) {
+                try {
+                    translated = await translateTextBatch(source);
+                    translated = applyTranslationCorrection(source, translated);
+                    cache[source] = translated;
+                } catch (_) {
+                    translated = source;
+                }
+            } else {
+                translated = applyTranslationCorrection(source, translated);
+            }
+            if (translated && translated !== source) node.nodeValue = translated;
+        }
+        try { localStorage.setItem(cacheKey, JSON.stringify(cache)); } catch (_) {}
+    }
+
+    function closeJapaneseHelpPanel() {
+        if (japaneseHelpPanel) {
+            japaneseHelpPanel.remove();
+            japaneseHelpPanel = null;
+        }
+    }
+
+    async function openJapaneseHelpPanel() {
+        // Let PORTAL finish opening its native help first.
+        await new Promise(resolve => setTimeout(resolve, 120));
+        const native = findNativeHelpDialog();
+        if (!native) return;
+
+        closeJapaneseHelpPanel();
+        const overlay = document.createElement("div");
+        overlay.setAttribute("data-selection-list-plugin", "japanese-help-overlay");
+        Object.assign(overlay.style, {
+            position: "fixed", inset: "0", zIndex: "2147483646",
+            background: "rgba(0,0,0,.35)", display: "flex",
+            alignItems: "center", justifyContent: "center", padding: "24px",
+            boxSizing: "border-box"
+        });
+
+        const panel = document.createElement("div");
+        Object.assign(panel.style, {
+            position: "relative", maxWidth: "min(1100px, 94vw)", maxHeight: "90vh",
+            overflow: "auto", background: "#151c1e", color: "#fff",
+            border: "1px solid #566467", borderRadius: "6px",
+            boxShadow: "0 12px 40px rgba(0,0,0,.65)", padding: "10px",
+            boxSizing: "border-box"
+        });
+
+        const bar = document.createElement("div");
+        Object.assign(bar.style, {
+            position: "sticky", top: "0", zIndex: "2", display: "flex",
+            justifyContent: "space-between", alignItems: "center",
+            background: "#151c1e", padding: "2px 0 8px"
+        });
+        const title = document.createElement("strong");
+        title.textContent = "日本語ヘルプ";
+        const close = document.createElement("button");
+        close.textContent = "×";
+        Object.assign(close.style, { background: "#293437", color: "#fff", border: "1px solid #566467", borderRadius: "4px", fontSize: "20px", width: "34px", height: "30px", cursor: "pointer" });
+        close.onclick = closeJapaneseHelpPanel;
+        bar.append(title, close);
+        panel.appendChild(bar);
+
+        const clone = native.cloneNode(true);
+        clone.removeAttribute("id");
+        clone.querySelectorAll('[id]').forEach(el => el.removeAttribute("id"));
+        panel.appendChild(clone);
+        overlay.appendChild(panel);
+        document.body.appendChild(overlay);
+        japaneseHelpPanel = overlay;
+
+        await translateHelpClone(clone);
+        // Hide the original only after the clone has been built successfully.
+        native.style.visibility = "hidden";
+    }
+
+    function bindHelpClick() {
+        if (helpClickBound) return;
+        helpClickBound = true;
+        document.addEventListener("click", event => {
+            const el = event.target?.closest?.("[role='menuitem'], li, div, span");
+            if (!el) return;
+            const text = normalize(el.innerText || el.textContent || "");
+            if (!/^help$|^ヘルプ$|help/i.test(text) || text.length > 80) return;
+            setTimeout(() => openJapaneseHelpPanel().catch(err => console.error("[Selection_List] Japanese help failed", err)), 80);
+        }, true);
+    }
+
     function addSelectionListMenu(submenu) {
         if (!submenu || !submenu.isConnected) return;
         if (submenu.querySelector('[data-selection-list-plugin="root"]')) return;
@@ -1944,6 +2090,7 @@
     }
 
     function startObserver() {
+        bindHelpClick();
         if (observer) return;
         observer = new MutationObserver(scan);
         observer.observe(document.documentElement || document.body, { childList: true, subtree: true });
