@@ -1876,6 +1876,157 @@
     }
 
     // ============================================================
+    // Portal UI Japanese toggle
+    // - Shared ON/OFF state for the native Help translation and the
+    //   Blockly flyout (the block list shown on the right after selecting
+    //   a section on the left).
+    // - Does not modify the host application code.
+    // ============================================================
+    const UI_JA_STATE_KEY = "selectionListUiJapaneseEnabled_v1";
+    let uiJapaneseEnabled = true;
+    try {
+        const saved = localStorage.getItem(UI_JA_STATE_KEY);
+        if (saved !== null) uiJapaneseEnabled = saved === "1";
+    } catch (_) {}
+
+    function isUiJapaneseEnabled() {
+        return uiJapaneseEnabled === true;
+    }
+
+    function setUiJapaneseEnabled(enabled) {
+        uiJapaneseEnabled = !!enabled;
+        try { localStorage.setItem(UI_JA_STATE_KEY, uiJapaneseEnabled ? "1" : "0"); } catch (_) {}
+        if (uiJapaneseEnabled) {
+            scheduleNativeHelpTranslation();
+            scheduleFlyoutTranslation();
+        } else {
+            restoreNativeHelpTranslation();
+            restoreFlyoutTranslation();
+        }
+        updateUiJapaneseToggleLabels();
+    }
+
+    const flyoutOriginalText = new WeakMap();
+    const flyoutOriginalFontSize = new WeakMap();
+
+    function collectFlyoutTextNodes() {
+        const roots = [...document.querySelectorAll('.blocklyFlyout')]
+            .filter(el => {
+                const r = el.getBoundingClientRect();
+                const cs = getComputedStyle(el);
+                return r.width > 1 && r.height > 1 && cs.display !== 'none' && cs.visibility !== 'hidden';
+            });
+        const nodes = [];
+        for (const root of roots) {
+            const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+            let node;
+            while ((node = walker.nextNode())) {
+                const parent = node.parentElement;
+                if (!parent) continue;
+                if (/^(SCRIPT|STYLE|CODE|PRE|INPUT|TEXTAREA|BUTTON)$/.test(parent.tagName)) continue;
+                const text = normalize(node.nodeValue);
+                if (!text || /^[\d\s\-_/.:,()[\]{}]+$/.test(text)) continue;
+                // Blockly SVG labels / fields only. Do not touch hidden metadata.
+                if (!parent.closest('.blocklyFlyout')) continue;
+                nodes.push(node);
+            }
+        }
+        return [...new Set(nodes)];
+    }
+
+    async function translateFlyoutText() {
+        if (!isUiJapaneseEnabled()) return;
+        const nodes = collectFlyoutTextNodes();
+        const cacheKey = "selectionListFlyoutTranslationCache_v1";
+        let cache = {};
+        try { cache = JSON.parse(localStorage.getItem(cacheKey) || "{}"); } catch (_) { cache = {}; }
+
+        for (let i = 0; i < nodes.length; i += 12) {
+            const batch = nodes.slice(i, i + 12);
+            await Promise.all(batch.map(async node => {
+                if (!node.isConnected) return;
+                const source = normalize(flyoutOriginalText.get(node) || node.nodeValue);
+                if (!source) return;
+                if (!flyoutOriginalText.has(node)) flyoutOriginalText.set(node, node.nodeValue);
+                let translated = applyTranslationCorrection(source, cache[source] || "");
+                if (!translated || translated === source) {
+                    try {
+                        const raw = await translateTextBatch(source);
+                        translated = applyTranslationCorrection(source, raw);
+                        cache[source] = translated || source;
+                    } catch (_) {
+                        translated = source;
+                    }
+                }
+                if (translated && node.isConnected && translated !== source) node.nodeValue = translated;
+            }));
+        }
+        try { localStorage.setItem(cacheKey, JSON.stringify(cache)); } catch (_) {}
+        fitTranslatedFlyoutText();
+    }
+
+    function fitTranslatedFlyoutText() {
+        if (!isUiJapaneseEnabled()) return;
+        document.querySelectorAll('.blocklyFlyout text').forEach(textEl => {
+            if (!textEl.textContent?.trim()) return;
+            const parent = textEl.closest('g.blocklyDraggable, g.blocklyFlyoutButton') || textEl.parentElement;
+            if (!parent?.getBBox) return;
+            try {
+                const textBox = textEl.getBBox();
+                const parentBox = parent.getBBox();
+                const maxWidth = Math.max(24, parentBox.width - 14);
+                if (textBox.width > maxWidth && textBox.width > 0) {
+                    const current = parseFloat(getComputedStyle(textEl).fontSize) || parseFloat(textEl.getAttribute('font-size')) || 12;
+                    if (!flyoutOriginalFontSize.has(textEl)) flyoutOriginalFontSize.set(textEl, current);
+                    const next = Math.max(9, Math.min(current, current * maxWidth / textBox.width));
+                    textEl.style.fontSize = `${next}px`;
+                } else if (flyoutOriginalFontSize.has(textEl)) {
+                    textEl.style.fontSize = `${flyoutOriginalFontSize.get(textEl)}px`;
+                }
+            } catch (_) {}
+        });
+    }
+
+    function restoreFlyoutTranslation() {
+        document.querySelectorAll('.blocklyFlyout text').forEach(textEl => {
+            const node = textEl.firstChild;
+            if (node && flyoutOriginalText.has(node)) node.nodeValue = flyoutOriginalText.get(node);
+            if (flyoutOriginalFontSize.has(textEl)) textEl.style.fontSize = `${flyoutOriginalFontSize.get(textEl)}px`;
+        });
+    }
+
+    let flyoutTranslationTimer = null;
+    function scheduleFlyoutTranslation() {
+        if (flyoutTranslationTimer) clearTimeout(flyoutTranslationTimer);
+        flyoutTranslationTimer = setTimeout(() => {
+            flyoutTranslationTimer = null;
+            if (isUiJapaneseEnabled()) translateFlyoutText().catch(() => {});
+        }, 120);
+    }
+
+    function addLocalizationToggle(submenu) {
+        if (!submenu || !submenu.isConnected) return;
+        let item = submenu.querySelector('[data-selection-list-plugin="ui-ja-toggle"]');
+        if (item) {
+            const label = item.querySelector('.selection-list-plugin-menu-label');
+            if (label) label.textContent = isUiJapaneseEnabled() ? 'メニュー日本語化 ON' : 'メニュー日本語化 OFF';
+            return;
+        }
+        item = menuItem(isUiJapaneseEnabled() ? 'メニュー日本語化 ON' : 'メニュー日本語化 OFF', () => {
+            setUiJapaneseEnabled(!isUiJapaneseEnabled());
+        });
+        item.setAttribute('data-selection-list-plugin', 'ui-ja-toggle');
+        item.setAttribute('data-bf6-menu-key', 'selection-list-ui-ja-toggle');
+        submenu.appendChild(item);
+    }
+
+    function updateUiJapaneseToggleLabels() {
+        document.querySelectorAll('[data-selection-list-plugin="ui-ja-toggle"] .selection-list-plugin-menu-label').forEach(label => {
+            label.textContent = isUiJapaneseEnabled() ? 'メニュー日本語化 ON' : 'メニュー日本語化 OFF';
+        });
+    }
+
+    // ============================================================
     // Native Help Japanese translation
     // - Do not replace or wrap the host Help dialog.
     // - Do not add a BF6ヘルプ menu item.
@@ -1884,6 +2035,7 @@
     // ============================================================
     let helpTranslationRunning = false;
     let helpTranslationTimer = null;
+    const helpOriginalText = new WeakMap();
 
     function isVisibleHelpElement(el) {
         if (!el || !el.isConnected) return false;
@@ -1927,7 +2079,7 @@
     }
 
     async function translateNativeHelpDialog(dialog) {
-        if (!dialog || helpTranslationRunning) return;
+        if (!dialog || helpTranslationRunning || !isUiJapaneseEnabled()) return;
         helpTranslationRunning = true;
         try {
             const nodes = collectHelpTextNodes(dialog);
@@ -1938,8 +2090,9 @@
             for (let i = 0; i < nodes.length; i += 10) {
                 const batch = nodes.slice(i, i + 10);
                 await Promise.all(batch.map(async node => {
-                    const source = normalize(node.nodeValue);
+                    const source = normalize(helpOriginalText.get(node) || node.nodeValue);
                     if (!source) return;
+                    if (!helpOriginalText.has(node)) helpOriginalText.set(node, node.nodeValue);
                     let translated = applyTranslationCorrection(source, cache[source] || "");
                     if (!translated || translated === source) {
                         try {
@@ -1961,11 +2114,21 @@
         }
     }
 
+    function restoreNativeHelpTranslation() {
+        const dialog = findNativeHelpDialogForTranslation();
+        if (!dialog) return;
+        const nodes = collectHelpTextNodes(dialog);
+        nodes.forEach(node => {
+            if (helpOriginalText.has(node)) node.nodeValue = helpOriginalText.get(node);
+        });
+    }
+
     function scheduleNativeHelpTranslation() {
         if (helpTranslationTimer) clearTimeout(helpTranslationTimer);
         // Let the host finish constructing/populating its normal Help dialog.
         helpTranslationTimer = setTimeout(async () => {
             helpTranslationTimer = null;
+            if (!isUiJapaneseEnabled()) return;
             const dialog = findNativeHelpDialogForTranslation();
             if (!dialog) return;
             await translateNativeHelpDialog(dialog);
@@ -1984,7 +2147,8 @@
         // Observe DOM changes without changing the native Help itself.
         const helpObserver = new MutationObserver(() => {
             const dialog = findNativeHelpDialogForTranslation();
-            if (dialog) scheduleNativeHelpTranslation();
+            if (dialog && isUiJapaneseEnabled()) scheduleNativeHelpTranslation();
+            if (isUiJapaneseEnabled() && document.querySelector('.blocklyFlyout')) scheduleFlyoutTranslation();
         });
         helpObserver.observe(document.documentElement || document.body, { childList: true, subtree: true });
 
@@ -1997,10 +2161,68 @@
         }, true);
     }
 
+    function addSelectionListMenu(submenu) {
+        if (!submenu || !submenu.isConnected) return;
+        if (submenu.querySelector('[data-selection-list-plugin="root"]')) return;
+
+        const root = document.createElement("div");
+        root.className = "selection-list-plugin-root";
+        root.setAttribute("data-selection-list-plugin", "root");
+        Object.assign(root.style, {
+            padding: "5px 18px",
+            whiteSpace: "nowrap",
+            background: "rgb(22, 29, 30)",
+            color: "#ffffff",
+            cursor: "pointer",
+            fontSize: "15px",
+            lineHeight: "1.3",
+            borderTop: "1px solid #3a4648",
+            marginTop: "3px",
+            position: "relative"
+        });
+
+        const title = document.createElement("span");
+        title.textContent = "Selection List  ›";
+        root.appendChild(title);
+
+        let submenuOpen = false;
+
+        root.addEventListener("mouseenter", event => {
+            root.style.background = "rgb(48,60,62)";
+            if (!submenuOpen) {
+                submenuOpen = true;
+                createFloatingMenu(root, event.clientX, event.clientY);
+            }
+        });
+
+        root.addEventListener("mouseleave", event => {
+            root.style.background = "rgb(22,29,30)";
+            // Keep the submenu alive while the pointer is over the floating panel.
+            const panel = document.querySelector('[data-selection-list-plugin="floating-root"]');
+            if (panel && event.relatedTarget && panel.contains(event.relatedTarget)) return;
+            submenuOpen = false;
+            removeFloatingMenu();
+        });
+
+        // Hover only, matching PORTAL's native Options behavior. If the parent
+        // menu is rebuilt, re-create the three entries from the current cursor.
+        root.addEventListener("mousemove", event => {
+            const panel = document.querySelector('[data-selection-list-plugin="floating-root"]');
+            if (!submenuOpen || !panel) {
+                submenuOpen = true;
+                createFloatingMenu(root, event.clientX, event.clientY);
+            }
+        });
+
+        submenu.appendChild(root);
+    }
+
     function scan() {
         const block = getCurrentContextBlock();
         const eligible = isSelectionListBlock(block);
         const submenus = document.querySelectorAll(".bf6-experience-manager-options-submenu");
+        // The localization switch is available in Options for every context.
+        submenus.forEach(addLocalizationToggle);
         if (!eligible) {
             submenus.forEach(submenu => submenu.querySelector('[data-selection-list-plugin="root"]')?.remove());
             removeFloatingMenu();
@@ -2034,6 +2256,7 @@
 
     plugin.initializeWorkspace = async function () {
         bindNativeHelpTranslation();
+        if (isUiJapaneseEnabled()) scheduleFlyoutTranslation();
         startObserver();
         scan();
     };
