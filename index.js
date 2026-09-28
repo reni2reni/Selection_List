@@ -914,7 +914,69 @@
             length += extra;
         }
         if (batch.length) batches.push(batch);
+        // マウスホバーでブロック手前に大きく日本語名を表示するポップアップ
+        let hoverTooltipEl = null;
+        function getHoverTooltip() {
+            if (!hoverTooltipEl) {
+                hoverTooltipEl = document.createElement("div");
+                hoverTooltipEl.setAttribute("data-selection-list-plugin", "hover-tooltip");
+                Object.assign(hoverTooltipEl.style, {
+                    position: "fixed",
+                    zIndex: "2147483647",
+                    padding: "6px 12px",
+                    background: "rgba(15, 20, 24, 0.95)",
+                    color: "#ffffff",
+                    border: "1px solid #4da3ff",
+                    borderRadius: "4px",
+                    boxShadow: "0 4px 16px rgba(0,0,0,0.6)",
+                    fontSize: "14px",
+                    fontWeight: "bold",
+                    fontFamily: "sans-serif",
+                    pointerEvents: "none",
+                    display: "none",
+                    whiteSpace: "nowrap",
+                    transform: "translateY(-100%)",
+                    marginTop: "-8px"
+                });
+                document.body.appendChild(hoverTooltipEl);
+            }
+            return hoverTooltipEl;
+        }
 
+        function attachHoverPopup(blockGroup, jaText) {
+            if (!blockGroup) return;
+            blockGroup.dataset.jaTooltip = jaText;
+            if (blockGroup._jaHoverBound) return;
+            blockGroup._jaHoverBound = true;
+
+            blockGroup.addEventListener("mouseenter", (e) => {
+                if (!japaneseUiEnabled || !blockGroup.dataset.jaTooltip) return;
+                const tip = getHoverTooltip();
+                tip.textContent = blockGroup.dataset.jaTooltip;
+                tip.style.display = "block";
+                const rect = blockGroup.getBoundingClientRect();
+                tip.style.left = `${Math.round(rect.left)}px`;
+                tip.style.top = `${Math.round(rect.top)}px`;
+            });
+
+            blockGroup.addEventListener("mouseleave", () => {
+                if (hoverTooltipEl) hoverTooltipEl.style.display = "none";
+            });
+        }
+        jobs.forEach(job => {
+            const translated = result.get(job.phrase);
+            if (!job.el.isConnected || !translated || translated === job.phrase) return;
+
+            // ブロック表面のテキストは元のサイズを保ったまま日本語化
+            job.el.textContent = translated;
+            job.el.style.fontSize = "";
+
+            // マウスホバーで最前面に大きく日本語名が出るようにポップアップを紐付け
+            const blockGroup = job.el.closest("g.blocklyDraggable") || job.el.parentElement;
+            if (blockGroup) {
+                attachHoverPopup(blockGroup, translated);
+            }
+        });
         const translateBatch = async sourceBatch => {
             try {
                 const source = sourceBatch.map(item => item.source).join("\n");
@@ -1966,315 +2028,8 @@
         }
     }, true);
 
-
-    // ---------------------------------------------------------------------
-    // Japanese hover popup for Blockly flyout + native Help translation.
-    // These hooks are intentionally event-driven.  They do not continuously
-    // rewrite the Blockly flyout or the whole document.
-    // ---------------------------------------------------------------------
-    let jaHoverPopup = null;
-    let jaHoverTimer = null;
-    let jaHoverRequestId = 0;
-    const jaHoverCacheKey = "selectionListJapaneseHoverCache_v1";
-    const jaHelpCacheKey = "selectionListJapaneseHelpCache_v1";
-    let jaHelpBusy = false;
-
-    function loadJaCache(key) {
-        try {
-            const value = JSON.parse(localStorage.getItem(key) || "{}");
-            return value && typeof value === "object" ? value : {};
-        } catch (_) {
-            return {};
-        }
-    }
-
-    function saveJaCache(key, value) {
-        try { localStorage.setItem(key, JSON.stringify(value)); } catch (_) {}
-    }
-
-    function isSingleLetterToken(value) {
-        return /^[A-Za-z]$/.test(String(value || "").trim());
-    }
-
-    function splitCamelForJapanese(value) {
-        const text = normalize(value);
-        if (!text) return "";
-        if (/\s/.test(text) || /[^A-Za-z0-9_]/.test(text)) {
-            return text;
-        }
-        return text
-            .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
-            .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-            .replace(/([A-Za-z])([0-9]+)/g, "$1 $2")
-            .replace(/([0-9]+)([A-Za-z])/g, "$1 $2")
-            .replace(/_+/g, " ")
-            .replace(/\s+/g, " ")
-            .trim();
-    }
-
-    function looksLikeUntranslated(source, translated) {
-        const a = normalize(source);
-        const b = normalize(translated);
-        if (!b) return true;
-        if (a === b) return true;
-        // English-only output means the first request did not actually
-        // produce a Japanese translation.
-        return /^[A-Za-z0-9 _\-./:()]+$/.test(b);
-    }
-
-    async function translateJapaneseDisplay(value, cacheKey = jaHoverCacheKey) {
-        const source = normalize(value);
-        if (!source || isSingleLetterToken(source)) return source;
-
-        const cache = loadJaCache(cacheKey);
-        if (typeof cache[source] === "string" && cache[source]) {
-            return applyTranslationCorrection(source, cache[source]);
-        }
-
-        let requestText = source;
-        const camel = splitCamelForJapanese(source);
-        if (camel && camel !== source) requestText = camel;
-
-        let translated = "";
-        try {
-            translated = normalize(await translateTextBatch(requestText));
-        } catch (_) {
-            translated = "";
-        }
-
-        // If the first result still looks like the original identifier,
-        // retry explicitly with CamelCase word boundaries.
-        if (looksLikeUntranslated(source, translated) && camel && camel !== source) {
-            try {
-                translated = normalize(await translateTextBatch(camel));
-            } catch (_) {}
-        }
-
-        translated = applyTranslationCorrection(source, translated || camel || source);
-        cache[source] = translated;
-        saveJaCache(cacheKey, cache);
-        return translated;
-    }
-
-    function ensureJaHoverPopup() {
-        if (jaHoverPopup && jaHoverPopup.isConnected) return jaHoverPopup;
-
-        const popup = document.createElement("div");
-        popup.id = "selection-list-ja-hover-popup";
-        Object.assign(popup.style, {
-            position: "fixed",
-            display: "none",
-            zIndex: "2147483647",
-            maxWidth: "520px",
-            minWidth: "180px",
-            padding: "10px 14px",
-            borderRadius: "7px",
-            border: "2px solid #6e8790",
-            background: "rgba(20,27,29,.97)",
-            color: "#fff",
-            fontSize: "22px",
-            fontWeight: "700",
-            lineHeight: "1.35",
-            whiteSpace: "normal",
-            wordBreak: "break-word",
-            boxShadow: "0 5px 22px rgba(0,0,0,.55)",
-            pointerEvents: "none",
-            textAlign: "left"
-        });
-        document.body.appendChild(popup);
-        jaHoverPopup = popup;
-        return popup;
-    }
-
-    function hideJaHoverPopup() {
-        if (jaHoverTimer) {
-            clearTimeout(jaHoverTimer);
-            jaHoverTimer = null;
-        }
-        const popup = ensureJaHoverPopup();
-        popup.style.display = "none";
-    }
-
-    function positionJaHoverPopup(popup, event) {
-        const margin = 12;
-        let x = Number(event.clientX || 0) + 18;
-        let y = Number(event.clientY || 0) + 18;
-        const rect = popup.getBoundingClientRect();
-        if (x + rect.width + margin > window.innerWidth) {
-            x = Math.max(margin, Number(event.clientX || 0) - rect.width - 18);
-        }
-        if (y + rect.height + margin > window.innerHeight) {
-            y = Math.max(margin, Number(event.clientY || 0) - rect.height - 18);
-        }
-        popup.style.left = `${Math.round(x)}px`;
-        popup.style.top = `${Math.round(y)}px`;
-    }
-
-    function getBlocklyFlyoutLabel(target) {
-        if (!target || !target.closest) return null;
-        const flyout = target.closest(".blocklyFlyout");
-        if (!flyout) return null;
-
-        // Prefer the actual Blockly label.  We intentionally do not alter it.
-        const textEl = target.closest(".blocklyText, text.blocklyText");
-        if (!textEl || !flyout.contains(textEl)) return null;
-
-        const source = normalize(textEl.textContent);
-        if (!source || source.length > 160) return null;
-        return { textEl, source };
-    }
-
-    function installBlocklyJapaneseHover() {
-        document.addEventListener("mousemove", event => {
-            const hit = getBlocklyFlyoutLabel(event.target);
-            if (!hit) {
-                hideJaHoverPopup();
-                return;
-            }
-
-            const popup = ensureJaHoverPopup();
-            if (popup.dataset.source !== hit.source || popup.style.display === "none") {
-                popup.dataset.source = hit.source;
-                popup.textContent = "日本語化中…";
-                popup.style.display = "block";
-                positionJaHoverPopup(popup, event);
-
-                const requestId = ++jaHoverRequestId;
-                if (jaHoverTimer) clearTimeout(jaHoverTimer);
-                jaHoverTimer = setTimeout(async () => {
-                    const translated = await translateJapaneseDisplay(hit.source);
-                    if (requestId !== jaHoverRequestId) return;
-                    popup.textContent = translated || hit.source;
-                    popup.style.display = "block";
-                    positionJaHoverPopup(popup, event);
-                }, 80);
-            } else {
-                positionJaHoverPopup(popup, event);
-            }
-        }, true);
-
-        document.addEventListener("mouseleave", hideJaHoverPopup, true);
-        window.addEventListener("blur", hideJaHoverPopup);
-    }
-
-    function isVisibleForJapaneseHelp(el) {
-        if (!el || !(el instanceof Element)) return false;
-        const style = getComputedStyle(el);
-        if (style.display === "none" || style.visibility === "hidden") return false;
-        const rect = el.getBoundingClientRect();
-        return rect.width > 100 && rect.height > 60;
-    }
-
-    function findNativeHelpContainer() {
-        const candidates = Array.from(document.querySelectorAll(
-            '[role="dialog"], .modal, .dialog, [class*="dialog"], [class*="modal"]'
-        )).filter(isVisibleForJapaneseHelp);
-
-        // Prefer a visible dialog containing a Help-like heading/label.
-        for (const el of candidates) {
-            const text = normalize(el.textContent);
-            if (/\bHelp\b/i.test(text) || /ヘルプ/.test(text)) return el;
-        }
-
-        // Fallback: look for a visible element whose direct/nearby text is Help.
-        const nodes = Array.from(document.querySelectorAll("h1,h2,h3,h4,.title,.header,[aria-label]"));
-        for (const node of nodes) {
-            if (!isVisibleForJapaneseHelp(node)) continue;
-            const label = normalize(node.textContent || node.getAttribute("aria-label"));
-            if (/^(Help|ヘルプ)$/i.test(label)) {
-                return node.closest('[role="dialog"], .modal, .dialog, [class*="dialog"], [class*="modal"]') || node.parentElement;
-            }
-        }
-        return null;
-    }
-
-    function collectHelpTextNodes(container) {
-        const nodes = [];
-        if (!container) return nodes;
-        const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
-        let node;
-        while ((node = walker.nextNode())) {
-            const parent = node.parentElement;
-            if (!parent) continue;
-            if (/^(SCRIPT|STYLE|CODE|PRE|TEXTAREA|INPUT|BUTTON|OPTION)$/i.test(parent.tagName)) continue;
-            const value = normalize(node.nodeValue);
-            if (!value || value.length > 500) continue;
-            if (/^[\d\s\-–—:;,.()[\]{}]+$/.test(value)) continue;
-            nodes.push(node);
-        }
-        return nodes;
-    }
-
-    async function translateNativeHelp(container) {
-        if (!container || jaHelpBusy) return;
-        jaHelpBusy = true;
-        try {
-            const cache = loadJaCache(jaHelpCacheKey);
-            const nodes = collectHelpTextNodes(container);
-
-            // Translate only visible/help text nodes.  Never rewrite code/sample
-            // blocks or controls.
-            for (let i = 0; i < nodes.length; i += 4) {
-                const batch = nodes.slice(i, i + 4);
-                await Promise.all(batch.map(async node => {
-                    const original = normalize(node.nodeValue);
-                    if (!original || isSingleLetterToken(original)) return;
-
-                    let translated = typeof cache[original] === "string" ? cache[original] : "";
-                    if (!translated) {
-                        translated = await translateJapaneseDisplay(original, jaHelpCacheKey);
-                        cache[original] = translated;
-                    }
-                    if (translated && node.parentNode) {
-                        node.nodeValue = translated;
-                    }
-                }));
-                await yieldToUI();
-            }
-            saveJaCache(jaHelpCacheKey, cache);
-        } finally {
-            jaHelpBusy = false;
-        }
-    }
-
-    function scheduleNativeHelpTranslation() {
-        setTimeout(() => {
-            const help = findNativeHelpContainer();
-            if (help) translateNativeHelp(help).catch(() => {});
-        }, 120);
-    }
-
-    function installNativeHelpJapanese() {
-        document.addEventListener("click", event => {
-            const el = event.target?.closest?.(
-                '[role="menuitem"], button, [aria-label], .menu-item, .dropdown-item, div, span'
-            );
-            if (!el) return;
-            const label = normalize(el.textContent || el.getAttribute?.("aria-label"));
-            if (!/^(Help|ヘルプ)$/i.test(label)) return;
-            scheduleNativeHelpTranslation();
-            setTimeout(scheduleNativeHelpTranslation, 500);
-            setTimeout(scheduleNativeHelpTranslation, 1200);
-        }, true);
-
-        // Detect the help dialog appearing without translating the whole page.
-        let pending = false;
-        const helpObserver = new MutationObserver(() => {
-            if (pending) return;
-            pending = true;
-            setTimeout(() => {
-                pending = false;
-                const help = findNativeHelpContainer();
-                if (help) translateNativeHelp(help).catch(() => {});
-            }, 180);
-        });
-        helpObserver.observe(document.body, { childList: true, subtree: true });
-    }
-
     plugin.initializeWorkspace = async function () {
         startObserver();
         scan();
-        installBlocklyJapaneseHover();
-        installNativeHelpJapanese();
     };
 })();
