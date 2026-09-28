@@ -1959,9 +1959,27 @@
             const translated = result.get(job.phrase);
             if (!job.el.isConnected || !translated || translated === job.phrase) return;
             job.el.textContent = translated;
-            const len = translated.length;
-            job.el.style.fontSize = len > 20 ? "10px" : (len > 14 ? "11px" : "12px");
+            job.el.style.fontSize = ""; // フォントサイズは縮小せず本来の大きさを維持
+
+            // 親ブロックの描画サイズを日本語の長さに合わせて再計算
+            try {
+                const blockEl = job.el.closest("g.blocklyDraggable");
+                const blockId = blockEl?.getAttribute("data-id") || blockEl?.dataset?.id;
+                const block = getBlockFromId(blockId);
+                if (block && typeof block.render === "function") {
+                    block.render();
+                }
+            } catch (_) { }
         });
+
+        // フライアウト（左ブロックメニュー）全体の配置と幅を再レイアウト
+        try {
+            const ws = getWorkspace();
+            const flyout = ws?.getFlyout?.() || ws?.getToolbox?.()?.getFlyout?.();
+            if (flyout && typeof flyout.reflow === "function") {
+                flyout.reflow();
+            }
+        } catch (_) { }
     }
 
     let blockJaTimer = null;
@@ -2036,21 +2054,22 @@
     }
 
     function findNativeHelpDialogForTranslation() {
-        const candidates = [...document.querySelectorAll('[role="dialog"], [aria-modal="true"], [class*="help" i], [class*="Help"]')]
+        // Portal固有のパネル要素やモーダル・サイドバー全般を広範囲に捕捉
+        const candidates = [...document.querySelectorAll('[role="dialog"], [aria-modal="true"], [class*="help" i], [class*="Help"], [class*="doc" i], [class*="Doc"], .modal, .sidebar-content')]
             .filter(isVisibleHelpElement);
         if (!candidates.length) return null;
         const scored = candidates.map(el => {
             const text = normalize(el.innerText || el.textContent || "");
             let score = 0;
-            if (/\bHelp\b|ヘルプ/i.test(text)) score += 8;
-            if (/description|usage|example|説明|使用例|例/i.test(text)) score += 6;
-            if (el.matches('[role="dialog"], [aria-modal="true"]')) score += 4;
-            if (el.querySelector('pre, code')) score += 3;
+            // 日本語・英語両方のキーワードを判定
+            if (/\b(Help|Documentation|Inputs|Outputs|Description)\b|ヘルプ|説明|入力|出力/i.test(text)) score += 10;
+            if (el.matches('[role="dialog"], [aria-modal="true"]')) score += 5;
+            if (el.querySelector('pre, code, .blocklyWorkspace')) score += 4;
             const r = el.getBoundingClientRect();
             return { el, score, area: r.width * r.height };
         });
         scored.sort((a, b) => b.score - a.score || b.area - a.area);
-        return scored[0]?.el || null;
+        return scored[0]?.score > 0 ? scored[0].el : null;
     }
 
     function collectHelpTextNodes(root) {
@@ -2105,31 +2124,37 @@
     }
 
     function scheduleNativeHelpTranslation() {
+        if (!japaneseUiEnabled) return; // 日本語化OFFのときは実行しない
         if (helpTranslationTimer) clearTimeout(helpTranslationTimer);
-        // Let the host finish constructing/populating its normal Help dialog.
-        helpTranslationTimer = setTimeout(async () => {
-            helpTranslationTimer = null;
+
+        // ヘルプ描画の非同期遅延に対応するため、複数回のタイミングでチェック
+        let attempts = 0;
+        const tryTranslate = async () => {
+            if (!japaneseUiEnabled) return;
             const dialog = findNativeHelpDialogForTranslation();
-            if (!dialog) return;
-            await translateNativeHelpDialog(dialog);
-            // Some Help implementations render sections lazily while scrolling.
-            setTimeout(() => {
-                const current = findNativeHelpDialogForTranslation();
-                if (current) translateNativeHelpDialog(current).catch(() => {});
-            }, 500);
-        }, 250);
+            if (dialog) {
+                await translateNativeHelpDialog(dialog);
+            }
+            attempts++;
+            if (attempts < 5) {
+                helpTranslationTimer = setTimeout(tryTranslate, 200);
+            }
+        };
+        helpTranslationTimer = setTimeout(tryTranslate, 150);
     }
 
     function bindNativeHelpTranslation() {
         if (window.__selectionListNativeHelpTranslationBound) return;
         window.__selectionListNativeHelpTranslationBound = true;
 
-        // Capture the host Help click, but never prevent/replace it.
+        // クリックだけでなく、コンテキストメニュー内のHelp選択も監視
         document.addEventListener("click", event => {
-            const target = event.target?.closest?.('[role="menuitem"], button, [aria-label], li, div, span');
+            const target = event.target?.closest?.('[role="menuitem"], button, [aria-label], li, div, span, a');
             if (!target) return;
             const text = normalize(target.innerText || target.textContent || target.getAttribute?.("aria-label") || "");
-            if (text === "Help" || text === "ヘルプ") scheduleNativeHelpTranslation();
+            if (/^(Help|ヘルプ)$/i.test(text) || text.includes("ヘルプ") || text.includes("Help")) {
+                scheduleNativeHelpTranslation();
+            }
         }, true);
     }
 
