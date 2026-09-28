@@ -1876,149 +1876,124 @@
     }
 
     // ============================================================
-    // ブロックのマウスホバー日本語ポップアップ（常時有効）
-    // ブロック表面の英語テキストは変更せず、手前に大きく表示する
+    // Native Help Japanese translation
+    // - Do not replace or wrap the host Help dialog.
+    // - Do not add a BF6ヘルプ menu item.
+    // - When the host Help is opened, translate its visible text in place.
+    // - CODE/PRE and form controls are kept unchanged so examples remain intact.
     // ============================================================
-    let hoverTooltipEl = null;
-    function getHoverTooltip() {
-        if (!hoverTooltipEl) {
-            hoverTooltipEl = document.createElement("div");
-            hoverTooltipEl.setAttribute("data-selection-list-plugin", "hover-tooltip");
-            Object.assign(hoverTooltipEl.style, {
-                position: "fixed",
-                zIndex: "2147483647",
-                padding: "8px 14px",
-                background: "rgba(10, 16, 20, 0.95)",
-                color: "#52c4ff",
-                border: "2px solid #52c4ff",
-                borderRadius: "6px",
-                fontSize: "16px",
-                fontWeight: "bold",
-                fontFamily: "sans-serif",
-                pointerEvents: "none",
-                display: "none",
-                boxShadow: "0 4px 16px rgba(0,0,0,0.8)",
-                whiteSpace: "nowrap"
-            });
-            document.body.appendChild(hoverTooltipEl);
-        }
-        return hoverTooltipEl;
+    let helpTranslationRunning = false;
+    let helpTranslationTimer = null;
+
+    function isVisibleHelpElement(el) {
+        if (!el || !el.isConnected) return false;
+        const cs = getComputedStyle(el);
+        const r = el.getBoundingClientRect();
+        return cs.display !== "none" && cs.visibility !== "hidden" && r.width > 80 && r.height > 60;
     }
 
-    function camelWordsForUi(text) {
-        let s = normalize(text);
-        if (!s) return [];
-        s = s.replace(/([a-z0-9])([A-Z])/g, "$1 $2");
-        s = s.replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2");
-        s = s.replace(/[_\-]+/g, " ");
-        return s.split(/\s+/).filter(Boolean);
-    }
-
-    async function setupFlyoutHoverPopups() {
-        const flyouts = [...document.querySelectorAll(".blocklyFlyout")].filter(el => {
-            const cs = getComputedStyle(el);
+    function findNativeHelpDialogForTranslation() {
+        const candidates = [...document.querySelectorAll('[role="dialog"], [aria-modal="true"], [class*="help" i], [class*="Help"]')]
+            .filter(isVisibleHelpElement);
+        if (!candidates.length) return null;
+        const scored = candidates.map(el => {
+            const text = normalize(el.innerText || el.textContent || "");
+            let score = 0;
+            if (/\bHelp\b|ヘルプ/i.test(text)) score += 8;
+            if (/description|usage|example|説明|使用例|例/i.test(text)) score += 6;
+            if (el.matches('[role="dialog"], [aria-modal="true"]')) score += 4;
+            if (el.querySelector('pre, code')) score += 3;
             const r = el.getBoundingClientRect();
-            return cs.display !== "none" && cs.visibility !== "hidden" && r.width > 10 && r.height > 10;
+            return { el, score, area: r.width * r.height };
         });
-        if (!flyouts.length) return;
+        scored.sort((a, b) => b.score - a.score || b.area - a.area);
+        return scored[0]?.el || null;
+    }
 
-        const jobs = [];
-        for (const flyout of flyouts) {
-            const draggableBlocks = flyout.querySelectorAll("g.blocklyDraggable");
-            for (const blockEl of draggableBlocks) {
-                if (blockEl._jaHoverBound) continue;
-
-                // ブロック内の表示テキスト要素を取得
-                const textEl = blockEl.querySelector(".blocklyText");
-                const source = normalize(textEl?.textContent);
-                if (!source || /^[A-Za-z]$/.test(source)) continue;
-
-                const phrase = camelWordsForUi(source).join(" ");
-                if (!phrase || /^[A-Za-z]$/.test(phrase)) continue;
-
-                jobs.push({ blockEl, phrase });
-            }
+    function collectHelpTextNodes(root) {
+        const nodes = [];
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        let node;
+        while ((node = walker.nextNode())) {
+            const parent = node.parentElement;
+            if (!parent) continue;
+            if (/^(SCRIPT|STYLE|CODE|PRE|TEXTAREA|INPUT|BUTTON|OPTION)$/.test(parent.tagName)) continue;
+            if (parent.closest('code, pre, textarea, input, button')) continue;
+            const text = normalize(node.nodeValue);
+            if (!text || /^[\d\s\-_/.:,()[\]{}]+$/.test(text)) continue;
+            nodes.push(node);
         }
-        if (!jobs.length) return;
+        return nodes;
+    }
 
-        // 翻訳キャッシュを利用・取得（ブロック表面は弄らない）
-        const cacheKey = "selectionListHoverJaTranslationCache_v1";
-        let cache = {};
-        try { cache = JSON.parse(localStorage.getItem(cacheKey) || "{}"); } catch (_) { }
+    async function translateNativeHelpDialog(dialog) {
+        if (!dialog || helpTranslationRunning) return;
+        helpTranslationRunning = true;
+        try {
+            const nodes = collectHelpTextNodes(dialog);
+            const cacheKey = "selectionListNativeHelpTranslationCache_v1";
+            let cache = {};
+            try { cache = JSON.parse(localStorage.getItem(cacheKey) || "{}"); } catch (_) { cache = {}; }
 
-        const unique = [...new Set(jobs.map(x => x.phrase))];
-        const result = new Map();
-        const pending = [];
-        unique.forEach(phrase => {
-            if (typeof cache[phrase] === "string" && cache[phrase]) result.set(phrase, cache[phrase]);
-            else pending.push(phrase);
-        });
-
-        for (let i = 0; i < pending.length; i += 6) {
-            const batch = pending.slice(i, i + 6);
-            try {
-                const raw = await translateTextBatch(batch.join("\n"));
-                const parts = raw.split(/\r?\n/);
-                if (parts.length === batch.length) {
-                    batch.forEach((phrase, n) => {
-                        const value = applyTranslationCorrection(phrase, parts[n]) || phrase;
-                        result.set(phrase, value); cache[phrase] = value;
-                    });
-                } else {
-                    for (const phrase of batch) {
-                        const value = applyTranslationCorrection(phrase, await translateTextBatch(phrase)) || phrase;
-                        result.set(phrase, value); cache[phrase] = value;
+            for (let i = 0; i < nodes.length; i += 10) {
+                const batch = nodes.slice(i, i + 10);
+                await Promise.all(batch.map(async node => {
+                    const source = normalize(node.nodeValue);
+                    if (!source) return;
+                    let translated = applyTranslationCorrection(source, cache[source] || "");
+                    if (!translated || translated === source) {
+                        try {
+                            const raw = await translateTextBatch(source);
+                            translated = applyTranslationCorrection(source, raw);
+                            cache[source] = translated || source;
+                        } catch (_) {
+                            translated = source;
+                        }
                     }
-                }
-            } catch (_) { }
-            await new Promise(resolve => setTimeout(resolve, 0));
-        }
-        try { localStorage.setItem(cacheKey, JSON.stringify(cache)); } catch (_) { }
-
-        const tip = getHoverTooltip();
-
-        // 各ブロックにホバーイベントを登録
-        jobs.forEach(job => {
-            const jaText = result.get(job.phrase);
-            if (!jaText || !job.blockEl.isConnected || job.blockEl._jaHoverBound) return;
-            job.blockEl._jaHoverBound = true;
-
-            job.blockEl.addEventListener("mouseenter", () => {
-                tip.textContent = jaText;
-                tip.style.display = "block";
-                const rect = job.blockEl.getBoundingClientRect();
-                tip.style.left = Math.max(10, rect.left) + "px";
-                tip.style.top = Math.max(10, rect.top - 42) + "px";
-            });
-
-            job.blockEl.addEventListener("mouseleave", () => {
-                tip.style.display = "none";
-            });
-        });
-    }
-
-    let blockHoverTimer = null;
-    function scheduleFlyoutPopups() {
-        clearTimeout(blockHoverTimer);
-        blockHoverTimer = setTimeout(() => {
-            blockHoverTimer = null;
-            setupFlyoutHoverPopups();
-        }, 150);
-    }
-
-    function bindBlocklyHoverPopups() {
-        if (window.__selectionListBlocklyHoverBound) return;
-        window.__selectionListBlocklyHoverBound = true;
-
-        // カテゴリ切り替えやフライアウトの表示変更時に検知
-        document.addEventListener('click', event => {
-            const target = event.target?.closest?.('.blocklyToolbox, .blocklyToolboxCategory, .blocklyToolboxCategoryLabel, .blocklyTreeRow, [role="treeitem"]');
-            if (target) scheduleFlyoutPopups();
-        }, true);
-        document.addEventListener('mouseup', event => {
-            if (event.target?.closest?.('.blocklyToolbox, .blocklyToolboxCategory, .blocklyTreeRow')) {
-                scheduleFlyoutPopups();
+                    if (translated && translated !== source && node.isConnected) {
+                        node.nodeValue = translated;
+                    }
+                }));
             }
+            try { localStorage.setItem(cacheKey, JSON.stringify(cache)); } catch (_) {}
+        } finally {
+            helpTranslationRunning = false;
+        }
+    }
+
+    function scheduleNativeHelpTranslation() {
+        if (helpTranslationTimer) clearTimeout(helpTranslationTimer);
+        // Let the host finish constructing/populating its normal Help dialog.
+        helpTranslationTimer = setTimeout(async () => {
+            helpTranslationTimer = null;
+            const dialog = findNativeHelpDialogForTranslation();
+            if (!dialog) return;
+            await translateNativeHelpDialog(dialog);
+            // Some Help implementations render sections lazily while scrolling.
+            setTimeout(() => {
+                const current = findNativeHelpDialogForTranslation();
+                if (current) translateNativeHelpDialog(current).catch(() => {});
+            }, 500);
+        }, 250);
+    }
+
+    function bindNativeHelpTranslation() {
+        if (window.__selectionListNativeHelpTranslationBound) return;
+        window.__selectionListNativeHelpTranslationBound = true;
+
+        // Observe DOM changes without changing the native Help itself.
+        const helpObserver = new MutationObserver(() => {
+            const dialog = findNativeHelpDialogForTranslation();
+            if (dialog) scheduleNativeHelpTranslation();
+        });
+        helpObserver.observe(document.documentElement || document.body, { childList: true, subtree: true });
+
+        // Capture the host Help click, but never prevent/replace it.
+        document.addEventListener("click", event => {
+            const target = event.target?.closest?.('[role="menuitem"], button, [aria-label], li, div, span');
+            if (!target) return;
+            const text = normalize(target.innerText || target.textContent || target.getAttribute?.("aria-label") || "");
+            if (text === "Help" || text === "ヘルプ") scheduleNativeHelpTranslation();
         }, true);
     }
 
@@ -2058,7 +2033,7 @@
     }, true);
 
     plugin.initializeWorkspace = async function () {
-        bindBlocklyHoverPopups();
+        bindNativeHelpTranslation();
         startObserver();
         scan();
     };
