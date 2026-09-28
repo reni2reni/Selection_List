@@ -1876,15 +1876,34 @@
     }
 
     // ============================================================
-    // Japanese UI toggle + Blockly flyout translation
-    // Added without replacing any existing Selection_List logic.
+    // ブロックのマウスホバー日本語ポップアップ（常時有効）
+    // ブロック表面の英語テキストは変更せず、手前に大きく表示する
     // ============================================================
-    const UI_JA_KEY = "selectionListJapaneseUiEnabled_v2";
-    let japaneseUiEnabled = true;
-    try {
-        const saved = localStorage.getItem(UI_JA_KEY);
-        if (saved !== null) japaneseUiEnabled = saved === "1";
-    } catch (_) {}
+    let hoverTooltipEl = null;
+    function getHoverTooltip() {
+        if (!hoverTooltipEl) {
+            hoverTooltipEl = document.createElement("div");
+            hoverTooltipEl.setAttribute("data-selection-list-plugin", "hover-tooltip");
+            Object.assign(hoverTooltipEl.style, {
+                position: "fixed",
+                zIndex: "2147483647",
+                padding: "8px 14px",
+                background: "rgba(10, 16, 20, 0.95)",
+                color: "#52c4ff",
+                border: "2px solid #52c4ff",
+                borderRadius: "6px",
+                fontSize: "16px",
+                fontWeight: "bold",
+                fontFamily: "sans-serif",
+                pointerEvents: "none",
+                display: "none",
+                boxShadow: "0 4px 16px rgba(0,0,0,0.8)",
+                whiteSpace: "nowrap"
+            });
+            document.body.appendChild(hoverTooltipEl);
+        }
+        return hoverTooltipEl;
+    }
 
     function camelWordsForUi(text) {
         let s = normalize(text);
@@ -1895,39 +1914,38 @@
         return s.split(/\s+/).filter(Boolean);
     }
 
-    function translateBlocklyFlyoutNow() {
-        if (!japaneseUiEnabled) return;
+    async function setupFlyoutHoverPopups() {
         const flyouts = [...document.querySelectorAll(".blocklyFlyout")].filter(el => {
             const cs = getComputedStyle(el);
             const r = el.getBoundingClientRect();
             return cs.display !== "none" && cs.visibility !== "hidden" && r.width > 10 && r.height > 10;
         });
         if (!flyouts.length) return;
-        const labels = [];
-        for (const flyout of flyouts) {
-            flyout.querySelectorAll(".blocklyText").forEach(el => {
-                if (el.getAttribute("data-selection-list-ja-original") !== null) return;
-                const source = normalize(el.textContent);
-                if (!source || /^[A-Za-z]$/.test(source)) return;
-                labels.push(el);
-            });
-        }
-        if (!labels.length) return;
-        translateBlocklyFlyoutLabels(labels).catch(() => {});
-    }
 
-    async function translateBlocklyFlyoutLabels(labels) {
-        const cacheKey = "selectionListBlocklyFlyoutTranslationCache_v2";
-        let cache = {};
-        try { cache = JSON.parse(localStorage.getItem(cacheKey) || "{}"); } catch (_) {}
-        const jobs = labels.map(el => {
-            const source = normalize(el.textContent);
-            if (el.getAttribute("data-selection-list-ja-original") === null) {
-                el.setAttribute("data-selection-list-ja-original", source);
+        const jobs = [];
+        for (const flyout of flyouts) {
+            const draggableBlocks = flyout.querySelectorAll("g.blocklyDraggable");
+            for (const blockEl of draggableBlocks) {
+                if (blockEl._jaHoverBound) continue;
+
+                // ブロック内の表示テキスト要素を取得
+                const textEl = blockEl.querySelector(".blocklyText");
+                const source = normalize(textEl?.textContent);
+                if (!source || /^[A-Za-z]$/.test(source)) continue;
+
+                const phrase = camelWordsForUi(source).join(" ");
+                if (!phrase || /^[A-Za-z]$/.test(phrase)) continue;
+
+                jobs.push({ blockEl, phrase });
             }
-            const words = camelWordsForUi(source);
-            return { el, source, phrase: words.join(" ") };
-        }).filter(x => x.phrase && !/^[A-Za-z]$/.test(x.phrase));
+        }
+        if (!jobs.length) return;
+
+        // 翻訳キャッシュを利用・取得（ブロック表面は弄らない）
+        const cacheKey = "selectionListHoverJaTranslationCache_v1";
+        let cache = {};
+        try { cache = JSON.parse(localStorage.getItem(cacheKey) || "{}"); } catch (_) { }
+
         const unique = [...new Set(jobs.map(x => x.phrase))];
         const result = new Map();
         const pending = [];
@@ -1935,6 +1953,7 @@
             if (typeof cache[phrase] === "string" && cache[phrase]) result.set(phrase, cache[phrase]);
             else pending.push(phrase);
         });
+
         for (let i = 0; i < pending.length; i += 6) {
             const batch = pending.slice(i, i + 6);
             try {
@@ -1951,232 +1970,59 @@
                         result.set(phrase, value); cache[phrase] = value;
                     }
                 }
-            } catch (_) {}
+            } catch (_) { }
             await new Promise(resolve => setTimeout(resolve, 0));
         }
-        try { localStorage.setItem(cacheKey, JSON.stringify(cache)); } catch (_) {}
-        let tip = document.getElementById("bf6-block-ja-popup");
-        if (!tip) {
-            tip = document.createElement("div");
-            tip.id = "bf6-block-ja-popup";
-            Object.assign(tip.style, {
-                position: "fixed",
-                zIndex: "2147483647",
-                padding: "8px 14px",
-                background: "rgba(10, 16, 20, 0.95)",
-                color: "#52c4ff",
-                border: "2px solid #52c4ff",
-                borderRadius: "6px",
-                fontSize: "16px",
-                fontWeight: "bold",
-                pointerEvents: "none",
-                display: "none",
-                boxShadow: "0 4px 16px rgba(0,0,0,0.8)",
-                whiteSpace: "nowrap"
-            });
-            document.body.appendChild(tip);
-        }
+        try { localStorage.setItem(cacheKey, JSON.stringify(cache)); } catch (_) { }
 
+        const tip = getHoverTooltip();
+
+        // 各ブロックにホバーイベントを登録
         jobs.forEach(job => {
-            const translated = result.get(job.phrase);
-            if (!job.el.isConnected || !translated || translated === job.phrase) return;
+            const jaText = result.get(job.phrase);
+            if (!jaText || !job.blockEl.isConnected || job.blockEl._jaHoverBound) return;
+            job.blockEl._jaHoverBound = true;
 
-            // ブロック自体のテキストも日本語に設定
-            job.el.textContent = translated;
-            job.el.style.fontSize = "";
-
-            // ブロック全体（マウスが乗るエリア）を取得
-            const blockGroup = job.el.closest("g.blocklyDraggable");
-            if (blockGroup && !blockGroup._jaHoverBound) {
-                blockGroup._jaHoverBound = true;
-
-                // マウスが乗った時に日本語名を大きくポップアップ表示
-                blockGroup.addEventListener("mouseenter", () => {
-                    if (!japaneseUiEnabled) return;
-                    tip.textContent = translated;
-                    tip.style.display = "block";
-                    const rect = blockGroup.getBoundingClientRect();
-                    tip.style.left = Math.max(10, rect.left) + "px";
-                    tip.style.top = Math.max(10, rect.top - 42) + "px";
-                });
-
-                // マウスが離れたら消す
-                blockGroup.addEventListener("mouseleave", () => {
-                    tip.style.display = "none";
-                });
-            }
-        });
-    }
-
-    let blockJaTimer = null;
-    function scheduleBlocklyFlyoutJapanese() {
-        if (!japaneseUiEnabled) return;
-        clearTimeout(blockJaTimer);
-        blockJaTimer = setTimeout(() => {
-            blockJaTimer = null;
-            translateBlocklyFlyoutNow();
-        }, 180);
-    }
-
-    function restoreBlocklyFlyoutEnglish() {
-        document.querySelectorAll('[data-selection-list-ja-original]').forEach(el => {
-            const original = el.getAttribute('data-selection-list-ja-original');
-            if (original !== null) {
-                el.textContent = original;
-                el.removeAttribute('data-selection-list-ja-original');
-                el.style.fontSize = '';
-            }
-        });
-    }
-
-    function setJapaneseUiEnabled(enabled) {
-        japaneseUiEnabled = !!enabled;
-        try { localStorage.setItem(UI_JA_KEY, japaneseUiEnabled ? "1" : "0"); } catch (_) {}
-        if (japaneseUiEnabled) scheduleBlocklyFlyoutJapanese();
-        else restoreBlocklyFlyoutEnglish();
-    }
-
-    function ensureJapaneseToggleInOptions() {
-        const menus = document.querySelectorAll('.bf6-experience-manager-options-submenu');
-        menus.forEach(menu => {
-            if (menu.querySelector('[data-selection-list-plugin="ja-toggle"]')) return;
-            const toggle = menuItem(`ブロック日本語化 ${japaneseUiEnabled ? "ON" : "OFF"}`, () => {
-                setJapaneseUiEnabled(!japaneseUiEnabled);
-                const label = toggle.querySelector('.selection-list-plugin-menu-label');
-                if (label) label.textContent = `ブロック日本語化 ${japaneseUiEnabled ? "ON" : "OFF"}`;
+            job.blockEl.addEventListener("mouseenter", () => {
+                tip.textContent = jaText;
+                tip.style.display = "block";
+                const rect = job.blockEl.getBoundingClientRect();
+                tip.style.left = Math.max(10, rect.left) + "px";
+                tip.style.top = Math.max(10, rect.top - 42) + "px";
             });
-            toggle.setAttribute('data-selection-list-plugin', 'ja-toggle');
-            menu.appendChild(toggle);
+
+            job.blockEl.addEventListener("mouseleave", () => {
+                tip.style.display = "none";
+            });
         });
     }
 
-    function bindBlocklyJapaneseTranslation() {
-        if (window.__selectionListBlocklyJapaneseBoundV2) return;
-        window.__selectionListBlocklyJapaneseBoundV2 = true;
+    let blockHoverTimer = null;
+    function scheduleFlyoutPopups() {
+        clearTimeout(blockHoverTimer);
+        blockHoverTimer = setTimeout(() => {
+            blockHoverTimer = null;
+            setupFlyoutHoverPopups();
+        }, 150);
+    }
+
+    function bindBlocklyHoverPopups() {
+        if (window.__selectionListBlocklyHoverBound) return;
+        window.__selectionListBlocklyHoverBound = true;
+
+        // カテゴリ切り替えやフライアウトの表示変更時に検知
         document.addEventListener('click', event => {
             const target = event.target?.closest?.('.blocklyToolbox, .blocklyToolboxCategory, .blocklyToolboxCategoryLabel, .blocklyTreeRow, [role="treeitem"]');
-            if (target) scheduleBlocklyFlyoutJapanese();
+            if (target) scheduleFlyoutPopups();
         }, true);
         document.addEventListener('mouseup', event => {
-            if (event.target?.closest?.('.blocklyToolbox, .blocklyToolboxCategory, .blocklyTreeRow')) scheduleBlocklyFlyoutJapanese();
-        }, true);
-    }
-
-    // ============================================================
-    // Native Help Japanese translation
-    // - Do not replace or wrap the host Help dialog.
-    // - Do not add a BF6ヘルプ menu item.
-    // - When the host Help is opened, translate its visible text in place.
-    // - CODE/PRE and form controls are kept unchanged so examples remain intact.
-    // ============================================================
-    let helpTranslationRunning = false;
-    let helpTranslationTimer = null;
-
-    function isVisibleHelpElement(el) {
-        if (!el || !el.isConnected) return false;
-        const cs = getComputedStyle(el);
-        const r = el.getBoundingClientRect();
-        return cs.display !== "none" && cs.visibility !== "hidden" && r.width > 80 && r.height > 60;
-    }
-
-    function findNativeHelpDialogForTranslation() {
-        // Portalのヘルプ画面（サイドパネル、ドロワー、モーダル全般）を検出
-        const candidates = document.querySelectorAll(
-            'aside, section, div[class*="sidebar"], div[class*="drawer"], div[class*="panel"], div[class*="help"], div[class*="Help"], [role="dialog"]'
-        );
-        for (const el of candidates) {
-            if (!isVisibleHelpElement(el)) continue;
-            const txt = (el.innerText || el.textContent || "");
-            // ヘルプ特有の英語キーワード（Description, Inputs, Returns等）が含まれている要素をヘルプと判定
-            if (/(Description|Inputs|Outputs|Returns|Usage)/i.test(txt)) {
-                return el;
-            }
-        }
-        return null;
-    }
-
-    function collectHelpTextNodes(root) {
-        const nodes = [];
-        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-        let node;
-        while ((node = walker.nextNode())) {
-            const parent = node.parentElement;
-            if (!parent) continue;
-            if (/^(SCRIPT|STYLE|CODE|PRE|TEXTAREA|INPUT|BUTTON|OPTION)$/.test(parent.tagName)) continue;
-            if (parent.closest('code, pre, textarea, input, button')) continue;
-            const text = normalize(node.nodeValue);
-            if (!text || /^[\d\s\-_/.:,()[\]{}]+$/.test(text)) continue;
-            nodes.push(node);
-        }
-        return nodes;
-    }
-
-    async function translateNativeHelpDialog(dialog) {
-        if (!dialog || helpTranslationRunning) return;
-        helpTranslationRunning = true;
-        try {
-            const nodes = collectHelpTextNodes(dialog);
-            const cacheKey = "selectionListNativeHelpTranslationCache_v1";
-            let cache = {};
-            try { cache = JSON.parse(localStorage.getItem(cacheKey) || "{}"); } catch (_) { cache = {}; }
-
-            for (let i = 0; i < nodes.length; i += 10) {
-                const batch = nodes.slice(i, i + 10);
-                await Promise.all(batch.map(async node => {
-                    const source = normalize(node.nodeValue);
-                    if (!source) return;
-                    let translated = applyTranslationCorrection(source, cache[source] || "");
-                    if (!translated || translated === source) {
-                        try {
-                            const raw = await translateTextBatch(source);
-                            translated = applyTranslationCorrection(source, raw);
-                            cache[source] = translated || source;
-                        } catch (_) {
-                            translated = source;
-                        }
-                    }
-                    if (translated && translated !== source && node.isConnected) {
-                        node.nodeValue = translated;
-                    }
-                }));
-            }
-            try { localStorage.setItem(cacheKey, JSON.stringify(cache)); } catch (_) {}
-        } finally {
-            helpTranslationRunning = false;
-        }
-    }
-
-    function scheduleNativeHelpTranslation() {
-        if (!japaneseUiEnabled) return;
-        if (helpTranslationTimer) clearTimeout(helpTranslationTimer);
-
-        // ヘルプ画面が開いて文字が描画される遅延に対応するため時間差で実行
-        const run = async () => {
-            const dialog = findNativeHelpDialogForTranslation();
-            if (dialog) await translateNativeHelpDialog(dialog);
-        };
-        setTimeout(run, 300);
-        setTimeout(run, 800);
-        setTimeout(run, 1500);
-    }
-
-    function bindNativeHelpTranslation() {
-        if (window.__selectionListNativeHelpTranslationBound) return;
-        window.__selectionListNativeHelpTranslationBound = true;
-
-        // 「Help」ボタンがクリックされたら翻訳を動かす
-        document.addEventListener("click", event => {
-            const target = event.target?.closest?.('button, [role="menuitem"], li, div, span, a');
-            if (!target) return;
-            const text = normalize(target.innerText || target.textContent || "");
-            if (/Help|ヘルプ/i.test(text)) {
-                scheduleNativeHelpTranslation();
+            if (event.target?.closest?.('.blocklyToolbox, .blocklyToolboxCategory, .blocklyTreeRow')) {
+                scheduleFlyoutPopups();
             }
         }, true);
     }
 
     function scan() {
-        ensureJapaneseToggleInOptions();
         const block = getCurrentContextBlock();
         const eligible = isSelectionListBlock(block);
         const submenus = document.querySelectorAll(".bf6-experience-manager-options-submenu");
@@ -2212,9 +2058,7 @@
     }, true);
 
     plugin.initializeWorkspace = async function () {
-        bindNativeHelpTranslation();
-        bindBlocklyJapaneseTranslation();
+        bindBlocklyHoverPopups();
         startObserver();
         scan();
     };
-})();
