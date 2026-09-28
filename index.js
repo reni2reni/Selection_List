@@ -1877,12 +1877,12 @@
 
     // ============================================================
     // BF6 Help panel
-    // - Adds a direct "BF6ヘルプ" item to the context menu.
-    // - Uses the portal's native Help content as the source, then hides the
-    //   native dialog and presents a draggable/resizable Japanese panel.
+    // - BF6ヘルプ is an independent plugin menu item.
+    // - The normal host Help is never hijacked.
+    // - When BF6ヘルプ is clicked, the host Help is opened only as a
+    //   temporary content source, then copied into our own scrollable panel.
     // ============================================================
     let japaneseHelpPanel = null;
-    let helpClickBound = false;
     let helpOpenInProgress = false;
 
     function isVisibleElement(el) {
@@ -1910,7 +1910,7 @@
 
     function findNativeHelpMenuItem() {
         const candidates = [...document.querySelectorAll('[role="menuitem"], li, button, div, span')]
-            .filter(el => isVisibleElement(el));
+            .filter(isVisibleElement);
         for (const el of candidates) {
             const text = normalize(el.innerText || el.textContent || "");
             if (text === "Help" || text === "ヘルプ") return el;
@@ -1935,114 +1935,159 @@
 
     async function translateHelpClone(root) {
         const nodes = collectTranslatableTextNodes(root);
-        const cacheKey = "selectionListHelpTranslationCache_v2";
+        const cacheKey = "selectionListHelpTranslationCache_v3";
         let cache = {};
         try { cache = JSON.parse(localStorage.getItem(cacheKey) || "{}"); } catch (_) { cache = {}; }
 
-        for (const node of nodes) {
-            const source = normalize(node.nodeValue);
-            if (!source) continue;
-            let translated = applyTranslationCorrection(source, cache[source] || "");
-            if (!translated || translated === source) {
-                try {
-                    const raw = await translateTextBatch(source);
-                    translated = applyTranslationCorrection(source, raw);
-                    cache[source] = translated || source;
-                } catch (_) {
-                    translated = source;
+        // Translate in small batches so a long help page remains responsive.
+        for (let i = 0; i < nodes.length; i += 12) {
+            const batch = nodes.slice(i, i + 12);
+            await Promise.all(batch.map(async node => {
+                const source = normalize(node.nodeValue);
+                if (!source) return;
+                let translated = applyTranslationCorrection(source, cache[source] || "");
+                if (!translated || translated === source) {
+                    try {
+                        const raw = await translateTextBatch(source);
+                        translated = applyTranslationCorrection(source, raw);
+                        cache[source] = translated || source;
+                    } catch (_) {
+                        translated = source;
+                    }
                 }
-            }
-            if (translated && translated !== source) node.nodeValue = translated;
+                if (translated && translated !== source) node.nodeValue = translated;
+            }));
         }
         try { localStorage.setItem(cacheKey, JSON.stringify(cache)); } catch (_) {}
     }
 
     function closeJapaneseHelpPanel() {
-        if (japaneseHelpPanel) {
-            const native = japaneseHelpPanel._native;
-            if (native) native.style.visibility = "";
-            japaneseHelpPanel.remove();
-            japaneseHelpPanel = null;
-        }
+        if (!japaneseHelpPanel) return;
+        const native = japaneseHelpPanel._native;
+        if (native && native.isConnected) native.style.visibility = "";
+        japaneseHelpPanel._cleanup?.();
+        japaneseHelpPanel.remove();
+        japaneseHelpPanel = null;
     }
 
     function makeHelpPanelDraggable(panel, handle) {
         let dragging = false, sx = 0, sy = 0, sl = 0, st = 0;
-        handle.addEventListener("mousedown", event => {
+        const down = event => {
             if (event.button !== 0 || event.target.closest("button")) return;
             const r = panel.getBoundingClientRect();
-            dragging = true; sx = event.clientX; sy = event.clientY; sl = r.left; st = r.top;
-            panel.style.left = `${r.left}px`; panel.style.top = `${r.top}px`;
-            panel.style.right = "auto"; panel.style.bottom = "auto";
+            dragging = true;
+            sx = event.clientX; sy = event.clientY; sl = r.left; st = r.top;
+            panel.style.left = `${r.left}px`;
+            panel.style.top = `${r.top}px`;
+            panel.style.right = "auto";
+            panel.style.bottom = "auto";
+            handle.setPointerCapture?.(event.pointerId);
             event.preventDefault();
-        });
+        };
         const move = event => {
             if (!dragging) return;
-            panel.style.left = `${Math.max(0, sl + event.clientX - sx)}px`;
-            panel.style.top = `${Math.max(0, st + event.clientY - sy)}px`;
+            const r = panel.getBoundingClientRect();
+            panel.style.left = `${Math.max(0, Math.min(window.innerWidth - r.width, sl + event.clientX - sx))}px`;
+            panel.style.top = `${Math.max(0, Math.min(window.innerHeight - r.height, st + event.clientY - sy))}px`;
         };
         const up = () => { dragging = false; };
-        document.addEventListener("mousemove", move, true);
-        document.addEventListener("mouseup", up, true);
-        panel._dragCleanup = () => {
-            document.removeEventListener("mousemove", move, true);
-            document.removeEventListener("mouseup", up, true);
+        handle.addEventListener("pointerdown", down);
+        document.addEventListener("pointermove", move, true);
+        document.addEventListener("pointerup", up, true);
+        return () => {
+            handle.removeEventListener("pointerdown", down);
+            document.removeEventListener("pointermove", move, true);
+            document.removeEventListener("pointerup", up, true);
         };
     }
 
     function makeHelpPanelResizable(panel, handle) {
         let resizing = false, sx = 0, sy = 0, sw = 0, sh = 0;
-        handle.addEventListener("mousedown", event => {
+        const down = event => {
             if (event.button !== 0) return;
             const r = panel.getBoundingClientRect();
             resizing = true; sx = event.clientX; sy = event.clientY; sw = r.width; sh = r.height;
-            event.preventDefault(); event.stopPropagation();
-        });
+            handle.setPointerCapture?.(event.pointerId);
+            event.preventDefault();
+            event.stopPropagation();
+        };
         const move = event => {
             if (!resizing) return;
-            panel.style.width = `${Math.max(480, sw + event.clientX - sx)}px`;
-            panel.style.height = `${Math.max(320, sh + event.clientY - sy)}px`;
+            const maxW = Math.max(480, window.innerWidth - panel.getBoundingClientRect().left - 8);
+            const maxH = Math.max(320, window.innerHeight - panel.getBoundingClientRect().top - 8);
+            panel.style.width = `${Math.min(maxW, Math.max(480, sw + event.clientX - sx))}px`;
+            panel.style.height = `${Math.min(maxH, Math.max(320, sh + event.clientY - sy))}px`;
         };
         const up = () => { resizing = false; };
-        document.addEventListener("mousemove", move, true);
-        document.addEventListener("mouseup", up, true);
-        panel._resizeCleanup = () => {
-            document.removeEventListener("mousemove", move, true);
-            document.removeEventListener("mouseup", up, true);
+        handle.addEventListener("pointerdown", down);
+        document.addEventListener("pointermove", move, true);
+        document.addEventListener("pointerup", up, true);
+        return () => {
+            handle.removeEventListener("pointerdown", down);
+            document.removeEventListener("pointermove", move, true);
+            document.removeEventListener("pointerup", up, true);
         };
+    }
+
+    function normalizeHelpClone(clone) {
+        // Host Help often has its own fixed height/overflow rules. Those rules
+        // are the reason only part of the help was visible in the old panel.
+        clone.style.setProperty("position", "static", "important");
+        clone.style.setProperty("left", "auto", "important");
+        clone.style.setProperty("top", "auto", "important");
+        clone.style.setProperty("right", "auto", "important");
+        clone.style.setProperty("bottom", "auto", "important");
+        clone.style.setProperty("width", "auto", "important");
+        clone.style.setProperty("height", "auto", "important");
+        clone.style.setProperty("min-height", "0", "important");
+        clone.style.setProperty("max-height", "none", "important");
+        clone.style.setProperty("max-width", "none", "important");
+        clone.style.setProperty("overflow", "visible", "important");
+        clone.style.setProperty("box-sizing", "border-box", "important");
+
+        clone.querySelectorAll("*").forEach(el => {
+            const cs = getComputedStyle(el);
+            if (cs.position !== "static") el.style.setProperty("position", "static", "important");
+            if (cs.overflow === "hidden" || cs.overflow === "auto" || cs.overflow === "scroll") {
+                el.style.setProperty("overflow", "visible", "important");
+            }
+            if (cs.maxHeight !== "none") el.style.setProperty("max-height", "none", "important");
+            if (cs.height !== "auto" && !/^(PRE|CODE|IMG|VIDEO|SVG)$/.test(el.tagName)) {
+                el.style.setProperty("height", "auto", "important");
+            }
+        });
     }
 
     async function openJapaneseHelpPanel() {
         if (helpOpenInProgress || japaneseHelpPanel) return;
         helpOpenInProgress = true;
         try {
-            // The native Help menu remains the source of truth. If it is not
-            // open yet, invoke it once so every description/example is loaded.
+            // Open the host Help only from this explicit BF6ヘルプ action.
             let native = findNativeHelpDialog();
             if (!native) {
                 const helpItem = findNativeHelpMenuItem();
                 if (helpItem) {
                     helpItem.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
                 }
-                for (let i = 0; i < 30 && !native; i++) {
+                for (let i = 0; i < 40 && !native; i++) {
                     await new Promise(resolve => setTimeout(resolve, 50));
                     native = findNativeHelpDialog();
                 }
             }
             if (!native) {
-                alert("BF6ヘルプの内容を取得できませんでした。");
+                alert("BF6ヘルプの内容を取得できませんでした。先に通常の「Help」を開いてください。");
                 return;
             }
 
-            closeJapaneseHelpPanel();
             const panel = document.createElement("div");
             panel.setAttribute("data-selection-list-plugin", "japanese-help-panel");
             Object.assign(panel.style, {
-                position: "fixed", left: "8vw", top: "8vh", width: "760px", height: "620px",
-                minWidth: "480px", minHeight: "320px", maxWidth: "92vw", maxHeight: "88vh",
+                position: "fixed", left: "7vw", top: "7vh", width: "780px", height: "680px",
+                minWidth: "480px", minHeight: "320px", maxWidth: "93vw", maxHeight: "90vh",
                 background: "#151c1e", color: "#fff", border: "1px solid #566467",
                 borderRadius: "6px", boxShadow: "0 12px 40px rgba(0,0,0,.65)",
-                zIndex: "2147483647", overflow: "hidden", boxSizing: "border-box"
+                zIndex: "2147483647", overflow: "hidden", boxSizing: "border-box",
+                resize: "none"
             });
 
             const bar = document.createElement("div");
@@ -2053,36 +2098,35 @@
             });
             const title = document.createElement("div");
             title.textContent = "BF6ヘルプ";
-            Object.assign(title.style, { fontWeight: "700", fontSize: "16px" });
+            title.style.cssText = "font-weight:700;font-size:16px;pointer-events:none";
             const close = document.createElement("button");
             close.type = "button"; close.textContent = "×"; close.title = "閉じる";
-            Object.assign(close.style, {
-                width: "30px", height: "30px", padding: "0", background: "transparent",
-                border: "0", color: "#fff", fontSize: "24px", lineHeight: "28px", cursor: "pointer"
-            });
+            Object.assign(close.style, { width: "30px", height: "30px", padding: "0", background: "transparent", border: "0", color: "#fff", fontSize: "24px", lineHeight: "28px", cursor: "pointer" });
             close.addEventListener("click", event => { event.preventDefault(); event.stopPropagation(); closeJapaneseHelpPanel(); });
             bar.append(title, close);
 
             const body = document.createElement("div");
             Object.assign(body.style, {
                 position: "absolute", left: "0", right: "0", top: "42px", bottom: "0",
-                overflow: "auto", padding: "14px", boxSizing: "border-box"
+                overflow: "auto", padding: "14px 18px 28px", boxSizing: "border-box",
+                overscrollBehavior: "contain", WebkitOverflowScrolling: "touch"
             });
+
             const clone = native.cloneNode(true);
             clone.removeAttribute("id");
             clone.querySelectorAll("[id]").forEach(el => el.removeAttribute("id"));
-            // Native close buttons are not needed in the independent panel.
             clone.querySelectorAll("button").forEach(btn => {
                 const t = normalize(btn.innerText || btn.textContent || "");
                 if (t === "×" || /^close$/i.test(t) || /閉じる/.test(t)) btn.remove();
             });
+            normalizeHelpClone(clone);
             body.appendChild(clone);
 
             const resize = document.createElement("div");
             Object.assign(resize.style, {
-                position: "absolute", right: "2px", bottom: "2px", width: "22px", height: "22px",
-                cursor: "nwse-resize", zIndex: "3",
-                background: "linear-gradient(135deg, transparent 0 45%, #77888b 46% 52%, transparent 53% 62%, #77888b 63% 69%, transparent 70%)"
+                position: "absolute", right: "1px", bottom: "1px", width: "24px", height: "24px",
+                cursor: "nwse-resize", zIndex: "5", touchAction: "none",
+                background: "linear-gradient(135deg, transparent 0 42%, #9aa8aa 43% 48%, transparent 49% 58%, #9aa8aa 59% 64%, transparent 65%)"
             });
 
             panel.append(bar, body, resize);
@@ -2091,24 +2135,46 @@
             panel._native = native;
             native.style.visibility = "hidden";
 
-            makeHelpPanelDraggable(panel, bar);
-            makeHelpPanelResizable(panel, resize);
+            const cleanDrag = makeHelpPanelDraggable(panel, bar);
+            const cleanResize = makeHelpPanelResizable(panel, resize);
+            panel._cleanup = () => { cleanDrag?.(); cleanResize?.(); };
             await translateHelpClone(clone);
         } finally {
             helpOpenInProgress = false;
         }
     }
 
-    function bindHelpClick() {
-        if (helpClickBound) return;
-        helpClickBound = true;
-        document.addEventListener("click", event => {
-            const el = event.target?.closest?.("[role='menuitem'], li, button, div, span");
-            if (!el) return;
-            const text = normalize(el.innerText || el.textContent || "");
-            if (!/^help$|^ヘルプ$/i.test(text) || text.length > 80) return;
-            setTimeout(() => openJapaneseHelpPanel().catch(err => console.error("[Selection_List] Japanese help failed", err)), 80);
-        }, true);
+    function addBF6HelpItemToMenu(menu) {
+        if (!menu || !isVisibleElement(menu)) return false;
+        if (menu.querySelector('[data-selection-list-plugin="bf6-help-item"]')) return true;
+        const help = menuItem("BF6ヘルプ", () => {
+            removeFloatingMenu();
+            openJapaneseHelpPanel().catch(error => console.error("[Selection_List] BF6 help failed", error));
+        });
+        help.setAttribute("data-selection-list-plugin", "bf6-help-item");
+        help.style.marginTop = "3px";
+        menu.appendChild(help);
+        return true;
+    }
+
+    function findTopContextMenu(submenu) {
+        // Prefer the actual role=menu container. This prevents BF6ヘルプ from
+        // becoming a child of Options/Selection List.
+        const roleMenu = submenu?.closest?.('[role="menu"]');
+        if (roleMenu && isVisibleElement(roleMenu)) return roleMenu;
+
+        // Otherwise walk upward and choose the smallest visible ancestor that
+        // looks like a context/menu container.
+        let el = submenu;
+        let best = null;
+        while (el && el !== document.body) {
+            if (isVisibleElement(el)) {
+                const cls = String(el.className || "");
+                if (/menu|context|popup|dropdown/i.test(cls)) best = el;
+            }
+            el = el.parentElement;
+        }
+        return best || submenu?.parentElement || null;
     }
 
     function addSelectionListMenu(submenu) {
@@ -2123,46 +2189,28 @@
             color: "#ffffff", cursor: "pointer", fontSize: "15px", lineHeight: "1.3",
             borderTop: "1px solid #3a4648", marginTop: "3px", position: "relative"
         });
-
         const title = document.createElement("span");
         title.textContent = "Selection List  ›";
         root.appendChild(title);
-
         let submenuOpen = false;
         root.addEventListener("mouseenter", event => {
             root.style.background = "rgb(48,60,62)";
-            if (!submenuOpen) {
-                submenuOpen = true;
-                createFloatingMenu(root, event.clientX, event.clientY);
-            }
+            if (!submenuOpen) { submenuOpen = true; createFloatingMenu(root, event.clientX, event.clientY); }
         });
         root.addEventListener("mouseleave", event => {
             root.style.background = "rgb(22,29,30)";
             const panel = document.querySelector('[data-selection-list-plugin="floating-root"]');
             if (panel && event.relatedTarget && panel.contains(event.relatedTarget)) return;
-            submenuOpen = false;
-            removeFloatingMenu();
+            submenuOpen = false; removeFloatingMenu();
         });
         root.addEventListener("mousemove", event => {
             const panel = document.querySelector('[data-selection-list-plugin="floating-root"]');
-            if (!submenuOpen || !panel) {
-                submenuOpen = true;
-                createFloatingMenu(root, event.clientX, event.clientY);
-            }
+            if (!submenuOpen || !panel) { submenuOpen = true; createFloatingMenu(root, event.clientX, event.clientY); }
         });
         submenu.appendChild(root);
 
-        // Add BF6ヘルプ directly to the same context menu, below Selection List.
-        const hostMenu = submenu.parentElement;
-        if (hostMenu && !hostMenu.querySelector('[data-selection-list-plugin="bf6-help-item"]')) {
-            const help = menuItem("BF6ヘルプ", () => {
-                removeFloatingMenu();
-                openJapaneseHelpPanel().catch(error => console.error("[Selection_List] BF6 help failed", error));
-            });
-            help.setAttribute("data-selection-list-plugin", "bf6-help-item");
-            help.style.marginTop = "3px";
-            hostMenu.appendChild(help);
-        }
+        const topMenu = findTopContextMenu(submenu);
+        addBF6HelpItemToMenu(topMenu);
     }
 
     function scan() {
@@ -2178,7 +2226,6 @@
     }
 
     function startObserver() {
-        bindHelpClick();
         if (observer) return;
         observer = new MutationObserver(scan);
         observer.observe(document.documentElement || document.body, { childList: true, subtree: true });
