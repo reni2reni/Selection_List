@@ -1876,6 +1876,181 @@
     }
 
     // ============================================================
+    // Blockly flyout hover Japanese popup
+    // - Never replace the original Blockly label.
+    // - Show a large Japanese popup only while the pointer is over a
+    //   flyout block.  This avoids changing Blockly layout/width.
+    // - If the translation service cannot understand an identifier as a
+    //   phrase, retry after splitting CamelCase into separate words.
+    // ============================================================
+    let blockHoverPopup = null;
+    let blockHoverTimer = null;
+    let blockHoverSource = "";
+    let blockHoverRequestId = 0;
+
+    function ensureBlockHoverPopup() {
+        if (blockHoverPopup && blockHoverPopup.isConnected) return blockHoverPopup;
+        const popup = document.createElement("div");
+        popup.id = "selection-list-block-hover-ja";
+        popup.style.cssText = [
+            "position:fixed",
+            "display:none",
+            "z-index:2147483646",
+            "max-width:420px",
+            "min-width:160px",
+            "padding:12px 18px",
+            "border-radius:10px",
+            "background:rgba(20,20,20,.96)",
+            "color:#fff",
+            "font-size:24px",
+            "font-weight:700",
+            "line-height:1.25",
+            "text-align:center",
+            "white-space:normal",
+            "word-break:break-word",
+            "box-shadow:0 4px 18px rgba(0,0,0,.45)",
+            "pointer-events:none",
+            "box-sizing:border-box"
+        ].join(";");
+        document.body.appendChild(popup);
+        blockHoverPopup = popup;
+        return popup;
+    }
+
+    function hideBlockHoverPopup() {
+        if (blockHoverTimer) {
+            clearTimeout(blockHoverTimer);
+            blockHoverTimer = null;
+        }
+        blockHoverSource = "";
+        blockHoverRequestId++;
+        if (blockHoverPopup) blockHoverPopup.style.display = "none";
+    }
+
+    function getFlyoutBlockFromTarget(target) {
+        if (!(target instanceof Element)) return null;
+        const flyout = target.closest?.('.blocklyFlyout, .blocklyFlyoutBackground, .blocklyFlyoutButton');
+        if (!flyout) return null;
+        const block = target.closest?.('g.blocklyDraggable, g.blocklyBlockCanvas > g, .blocklyFlyout .blocklyDraggable');
+        if (!block) return null;
+        // Do not react to blocks already placed in the workspace.
+        if (!block.closest?.('.blocklyWorkspace')) return block;
+        const parentFlyout = block.closest?.('.blocklyFlyout');
+        return parentFlyout ? block : null;
+    }
+
+    function getBlockDisplayName(block) {
+        if (!block) return "";
+        const textNodes = [...block.querySelectorAll?.('.blocklyText, text') || []]
+            .map(el => normalize(el.textContent || ""))
+            .filter(Boolean);
+        if (textNodes.length) {
+            // Prefer the first substantial label.  Avoid field values that are
+            // only numbers/one-letter tokens.
+            const preferred = textNodes.find(text => text.length > 1 && !/^[0-9]+$/.test(text));
+            return preferred || textNodes[0] || "";
+        }
+        return normalize(block.textContent || "");
+    }
+
+    async function translateCamelCaseFallback(source) {
+        const original = normalize(source);
+        if (!original) return "";
+        if (shouldKeepTranslationToken(original)) return original;
+        const spaced = splitCamelCaseForTranslation(original);
+        if (!spaced || spaced === original) return "";
+        try {
+            const translated = String(await translateTextBatch(spaced)).trim();
+            if (translated && translated !== spaced) return translated;
+        } catch (_) {}
+        return "";
+    }
+
+    async function translateHoverBlockLabel(source) {
+        const original = normalize(source);
+        if (!original) return "";
+        if (shouldKeepTranslationToken(original)) return original;
+
+        const cacheKey = "selectionListBlockHoverJaCache_v1";
+        let cache = {};
+        try { cache = JSON.parse(localStorage.getItem(cacheKey) || "{}"); } catch (_) { cache = {}; }
+        if (typeof cache[original] === "string" && cache[original]) return applyTranslationCorrection(original, cache[original]);
+
+        let translated = "";
+        try {
+            translated = applyTranslationCorrection(original, await translateTextBatch(original));
+        } catch (_) {}
+
+        // If the direct phrase is unchanged/poorly understood, retry with
+        // explicit CamelCase word boundaries.
+        if (!translated || translated === original) {
+            const fallback = await translateCamelCaseFallback(original);
+            if (fallback) translated = fallback;
+        }
+
+        if (!translated) translated = original;
+        cache[original] = translated;
+        try { localStorage.setItem(cacheKey, JSON.stringify(cache)); } catch (_) {}
+        return translated;
+    }
+
+    function positionBlockHoverPopup(popup, block) {
+        const r = block.getBoundingClientRect();
+        const margin = 12;
+        popup.style.left = "0px";
+        popup.style.top = "0px";
+        popup.style.display = "block";
+        const pw = popup.offsetWidth;
+        const ph = popup.offsetHeight;
+        let left = r.right + margin;
+        let top = r.top + (r.height - ph) / 2;
+        if (left + pw > window.innerWidth - margin) left = r.left - pw - margin;
+        if (left < margin) left = Math.max(margin, (window.innerWidth - pw) / 2);
+        if (top + ph > window.innerHeight - margin) top = window.innerHeight - ph - margin;
+        if (top < margin) top = margin;
+        popup.style.left = `${Math.round(left)}px`;
+        popup.style.top = `${Math.round(top)}px`;
+    }
+
+    function scheduleBlockHoverPopup(block) {
+        hideBlockHoverPopup();
+        const source = getBlockDisplayName(block);
+        if (!source) return;
+        blockHoverSource = source;
+        const requestId = ++blockHoverRequestId;
+        blockHoverTimer = setTimeout(async () => {
+            blockHoverTimer = null;
+            if (requestId !== blockHoverRequestId || blockHoverSource !== source || !block.isConnected) return;
+            const translated = await translateHoverBlockLabel(source);
+            if (requestId !== blockHoverRequestId || blockHoverSource !== source || !block.isConnected) return;
+            const popup = ensureBlockHoverPopup();
+            popup.textContent = translated || source;
+            positionBlockHoverPopup(popup, block);
+        }, 220);
+    }
+
+    function bindBlockHoverJapanesePopup() {
+        if (window.__selectionListBlockHoverJaBound) return;
+        window.__selectionListBlockHoverJaBound = true;
+        document.addEventListener("mouseover", event => {
+            const block = getFlyoutBlockFromTarget(event.target);
+            if (!block) return;
+            const related = event.relatedTarget;
+            if (related instanceof Node && block.contains(related)) return;
+            scheduleBlockHoverPopup(block);
+        }, true);
+        document.addEventListener("mouseout", event => {
+            const block = getFlyoutBlockFromTarget(event.target);
+            if (!block) return;
+            const related = event.relatedTarget;
+            if (related instanceof Node && block.contains(related)) return;
+            hideBlockHoverPopup();
+        }, true);
+        window.addEventListener("scroll", hideBlockHoverPopup, true);
+        window.addEventListener("resize", hideBlockHoverPopup);
+    }
+
+    // ============================================================
     // Native Help Japanese translation
     // - Do not replace or wrap the host Help dialog.
     // - Do not add a BF6ヘルプ menu item.
@@ -1945,11 +2120,19 @@
                         try {
                             const raw = await translateTextBatch(source);
                             translated = applyTranslationCorrection(source, raw);
-                            cache[source] = translated || source;
                         } catch (_) {
                             translated = source;
                         }
                     }
+                    // Help sometimes contains BF6 identifiers such as
+                    // OnPlayerEnterCapturePoint. If the phrase is not
+                    // translated as-is, split CamelCase and translate the
+                    // resulting words so the meaning is recoverable.
+                    if (!translated || translated === source) {
+                        const fallback = await translateCamelCaseFallback(source);
+                        if (fallback) translated = fallback;
+                    }
+                    cache[source] = translated || source;
                     if (translated && translated !== source && node.isConnected) {
                         node.nodeValue = translated;
                     }
@@ -2034,6 +2217,7 @@
 
     plugin.initializeWorkspace = async function () {
         bindNativeHelpTranslation();
+        bindBlockHoverJapanesePopup();
         startObserver();
         scan();
     };
