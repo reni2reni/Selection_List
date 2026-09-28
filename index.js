@@ -1876,14 +1876,27 @@
     }
 
     // ============================================================
-    // Native Help Japanese translation
-    // - Do not replace or wrap the host Help dialog.
-    // - Do not add a BF6ヘルプ menu item.
-    // - When the host Help is opened, translate its visible text in place.
-    // - CODE/PRE and form controls are kept unchanged so examples remain intact.
+    // Japanese UI toggle + native Help / Blockly flyout translation
+    // IMPORTANT: no global MutationObserver is used for translation.
+    // Translation runs only after an explicit menu/toolbox action.
     // ============================================================
+    const MENU_JA_KEY = "selectionListMenuJapaneseEnabled_v1";
+    let menuJapaneseEnabled = true;
     let helpTranslationRunning = false;
     let helpTranslationTimer = null;
+    const originalHelpText = new WeakMap();
+    const originalFlyoutText = new WeakMap();
+    let flyoutTranslationTimer = null;
+    let flyoutTranslationRunning = false;
+
+    try {
+        const saved = localStorage.getItem(MENU_JA_KEY);
+        if (saved !== null) menuJapaneseEnabled = saved !== "0";
+    } catch (_) {}
+
+    function saveMenuJapaneseSetting() {
+        try { localStorage.setItem(MENU_JA_KEY, menuJapaneseEnabled ? "1" : "0"); } catch (_) {}
+    }
 
     function isVisibleHelpElement(el) {
         if (!el || !el.isConnected) return false;
@@ -1935,10 +1948,11 @@
             let cache = {};
             try { cache = JSON.parse(localStorage.getItem(cacheKey) || "{}"); } catch (_) { cache = {}; }
 
-            for (let i = 0; i < nodes.length; i += 10) {
-                const batch = nodes.slice(i, i + 10);
+            for (let i = 0; i < nodes.length; i += 8) {
+                const batch = nodes.slice(i, i + 8);
                 await Promise.all(batch.map(async node => {
-                    const source = normalize(node.nodeValue);
+                    if (!originalHelpText.has(node)) originalHelpText.set(node, node.nodeValue);
+                    const source = normalize(originalHelpText.get(node));
                     if (!source) return;
                     let translated = applyTranslationCorrection(source, cache[source] || "");
                     if (!translated || translated === source) {
@@ -1946,14 +1960,11 @@
                             const raw = await translateTextBatch(source);
                             translated = applyTranslationCorrection(source, raw);
                             cache[source] = translated || source;
-                        } catch (_) {
-                            translated = source;
-                        }
+                        } catch (_) { translated = source; }
                     }
-                    if (translated && translated !== source && node.isConnected) {
-                        node.nodeValue = translated;
-                    }
+                    if (translated && translated !== source && node.isConnected) node.nodeValue = translated;
                 }));
+                await yieldToUI();
             }
             try { localStorage.setItem(cacheKey, JSON.stringify(cache)); } catch (_) {}
         } finally {
@@ -1961,39 +1972,181 @@
         }
     }
 
+    function restoreNativeHelp(dialog) {
+        if (!dialog) return;
+        const nodes = collectHelpTextNodes(dialog);
+        nodes.forEach(node => {
+            const original = originalHelpText.get(node);
+            if (original !== undefined && node.isConnected) node.nodeValue = original;
+        });
+    }
+
     function scheduleNativeHelpTranslation() {
         if (helpTranslationTimer) clearTimeout(helpTranslationTimer);
-        // Let the host finish constructing/populating its normal Help dialog.
         helpTranslationTimer = setTimeout(async () => {
             helpTranslationTimer = null;
             const dialog = findNativeHelpDialogForTranslation();
             if (!dialog) return;
-            await translateNativeHelpDialog(dialog);
-            // Some Help implementations render sections lazily while scrolling.
-            setTimeout(() => {
-                const current = findNativeHelpDialogForTranslation();
-                if (current) translateNativeHelpDialog(current).catch(() => {});
-            }, 500);
+            if (menuJapaneseEnabled) await translateNativeHelpDialog(dialog);
+            else restoreNativeHelp(dialog);
+        }, 350);
+    }
+
+    function findVisibleBlocklyFlyout() {
+        const candidates = [...document.querySelectorAll('.blocklyFlyout, .blocklyFlyoutBackground, [class*="blocklyFlyout"]')]
+            .filter(el => {
+                const r = el.getBoundingClientRect();
+                const cs = getComputedStyle(el);
+                return r.width > 20 && r.height > 20 && cs.display !== "none" && cs.visibility !== "hidden";
+            });
+        if (!candidates.length) return null;
+        const flyout = candidates.find(el => el.classList?.contains("blocklyFlyout"));
+        return flyout || candidates[0];
+    }
+
+    function collectFlyoutTextNodes(root) {
+        if (!root) return [];
+        const nodes = [];
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        let node;
+        while ((node = walker.nextNode())) {
+            const parent = node.parentElement;
+            if (!parent) continue;
+            if (/^(SCRIPT|STYLE|CODE|PRE|TEXTAREA|INPUT)$/.test(parent.tagName)) continue;
+            const text = normalize(node.nodeValue);
+            if (!text || text.length > 120) continue;
+            if (/^[\d\s\-_/.:,()[\]{}]+$/.test(text)) continue;
+            // Blockly's SVG text nodes are the visible flyout labels.
+            if (parent.tagName === "text" || parent.closest(".blocklyFlyout")) nodes.push(node);
+        }
+        return nodes;
+    }
+
+    function setFlyoutFontSize(node, translated) {
+        const el = node?.parentElement;
+        if (!el) return;
+        // Only shrink labels that actually became wider than their original text.
+        // Never change the host block geometry.
+        const original = normalize(originalFlyoutText.get(node) || node.nodeValue);
+        const ratio = translated.length / Math.max(1, original.length);
+        if (ratio <= 1.05) return;
+        const current = parseFloat(getComputedStyle(el).fontSize) || 12;
+        const size = Math.max(8, Math.min(current, current * Math.sqrt(1 / Math.min(ratio, 3))));
+        el.style.fontSize = `${size}px`;
+    }
+
+    async function translateBlocklyFlyout(root) {
+        if (!root || flyoutTranslationRunning) return;
+        flyoutTranslationRunning = true;
+        try {
+            const nodes = collectFlyoutTextNodes(root);
+            const cacheKey = "selectionListFlyoutTranslationCache_v1";
+            let cache = {};
+            try { cache = JSON.parse(localStorage.getItem(cacheKey) || "{}"); } catch (_) { cache = {}; }
+
+            // Small, bounded batches; no observer and no repeated scheduling.
+            for (let i = 0; i < nodes.length; i += 6) {
+                const batch = nodes.slice(i, i + 6);
+                await Promise.all(batch.map(async node => {
+                    if (!originalFlyoutText.has(node)) originalFlyoutText.set(node, node.nodeValue);
+                    const source = normalize(originalFlyoutText.get(node));
+                    if (!source || shouldKeepTranslationToken(source)) return;
+                    let translated = applyTranslationCorrection(source, cache[source] || "");
+                    if (!translated || translated === source) {
+                        try {
+                            const raw = await translateTextBatch(source);
+                            translated = applyTranslationCorrection(source, raw);
+                            cache[source] = translated || source;
+                        } catch (_) { translated = source; }
+                    }
+                    if (translated && translated !== source && node.isConnected) {
+                        node.nodeValue = translated;
+                        setFlyoutFontSize(node, translated);
+                    }
+                }));
+                await yieldToUI();
+            }
+            try { localStorage.setItem(cacheKey, JSON.stringify(cache)); } catch (_) {}
+        } finally {
+            flyoutTranslationRunning = false;
+        }
+    }
+
+    function restoreBlocklyFlyout(root) {
+        collectFlyoutTextNodes(root).forEach(node => {
+            const original = originalFlyoutText.get(node);
+            if (original !== undefined && node.isConnected) {
+                node.nodeValue = original;
+                const el = node.parentElement;
+                if (el) el.style.fontSize = "";
+            }
+        });
+    }
+
+    function scheduleBlocklyFlyoutTranslation() {
+        if (flyoutTranslationTimer) clearTimeout(flyoutTranslationTimer);
+        flyoutTranslationTimer = setTimeout(async () => {
+            flyoutTranslationTimer = null;
+            const root = findVisibleBlocklyFlyout();
+            if (!root) return;
+            if (menuJapaneseEnabled) await translateBlocklyFlyout(root);
+            else restoreBlocklyFlyout(root);
         }, 250);
     }
 
-    function bindNativeHelpTranslation() {
-        if (window.__selectionListNativeHelpTranslationBound) return;
-        window.__selectionListNativeHelpTranslationBound = true;
+    function addMenuJapaneseToggle() {
+        // Locate the host Options submenu by its own class when available.
+        const candidates = [...document.querySelectorAll('.bf6-experience-manager-options-submenu')];
+        for (const submenu of candidates) {
+            if (submenu.querySelector('[data-selection-list-plugin="menu-ja-toggle"]')) continue;
+            const item = document.createElement("div");
+            item.setAttribute("data-selection-list-plugin", "menu-ja-toggle");
+            item.textContent = `メニュー日本語化 ${menuJapaneseEnabled ? "ON" : "OFF"}`;
+            Object.assign(item.style, {
+                cursor: "pointer",
+                padding: "6px 10px",
+                color: "inherit",
+                userSelect: "none",
+                whiteSpace: "nowrap"
+            });
+            item.addEventListener("mouseenter", () => { item.style.background = "rgba(255,255,255,.08)"; });
+            item.addEventListener("mouseleave", () => { item.style.background = ""; });
+            item.addEventListener("click", event => {
+                event.preventDefault();
+                event.stopPropagation();
+                menuJapaneseEnabled = !menuJapaneseEnabled;
+                saveMenuJapaneseSetting();
+                item.textContent = `メニュー日本語化 ${menuJapaneseEnabled ? "ON" : "OFF"}`;
+                scheduleNativeHelpTranslation();
+                scheduleBlocklyFlyoutTranslation();
+            });
+            submenu.appendChild(item);
+        }
+    }
 
-        // Observe DOM changes without changing the native Help itself.
-        const helpObserver = new MutationObserver(() => {
-            const dialog = findNativeHelpDialogForTranslation();
-            if (dialog) scheduleNativeHelpTranslation();
-        });
-        helpObserver.observe(document.documentElement || document.body, { childList: true, subtree: true });
+    function bindJapaneseMenuTranslation() {
+        if (window.__selectionListJapaneseMenuBound) return;
+        window.__selectionListJapaneseMenuBound = true;
 
-        // Capture the host Help click, but never prevent/replace it.
+        // Do not observe the whole document. React only to explicit user actions.
         document.addEventListener("click", event => {
             const target = event.target?.closest?.('[role="menuitem"], button, [aria-label], li, div, span');
             if (!target) return;
             const text = normalize(target.innerText || target.textContent || target.getAttribute?.("aria-label") || "");
-            if (text === "Help" || text === "ヘルプ") scheduleNativeHelpTranslation();
+            if (text === "Help" || text === "ヘルプ") {
+                scheduleNativeHelpTranslation();
+                return;
+            }
+            // A toolbox/flyout opening click. Delay until Blockly has created the flyout.
+            if (target.closest?.('.blocklyToolboxDiv, .blocklyTreeRoot, .blocklyTreeRow, [class*="toolbox"]')) {
+                scheduleBlocklyFlyoutTranslation();
+            }
+        }, true);
+
+        document.addEventListener("contextmenu", () => {
+            // The host Options menu is created synchronously/asynchronously by the
+            // portal. Try a few bounded times, then stop. This is not a DOM observer.
+            [0, 80, 180].forEach(delay => setTimeout(addMenuJapaneseToggle, delay));
         }, true);
     }
 
@@ -2033,7 +2186,7 @@
     }, true);
 
     plugin.initializeWorkspace = async function () {
-        bindNativeHelpTranslation();
+        bindJapaneseMenuTranslation();
         startObserver();
         scan();
     };
