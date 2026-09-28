@@ -1877,231 +1877,145 @@
 
     // ============================================================
     // Japanese UI toggle + Blockly flyout translation
-    // Event-driven only: no document-wide MutationObserver is used here.
+    // Added without replacing any existing Selection_List logic.
     // ============================================================
-    const UI_JA_KEY = "selectionListJapaneseUiEnabled_v1";
+    const UI_JA_KEY = "selectionListJapaneseUiEnabled_v2";
     let japaneseUiEnabled = true;
     try {
         const saved = localStorage.getItem(UI_JA_KEY);
         if (saved !== null) japaneseUiEnabled = saved === "1";
     } catch (_) {}
 
-    function setJapaneseUiEnabled(enabled) {
-        japaneseUiEnabled = !!enabled;
-        try { localStorage.setItem(UI_JA_KEY, japaneseUiEnabled ? "1" : "0"); } catch (_) {}
-        // Help is translated when opened; no global rewrite is attempted here.
-        if (japaneseUiEnabled) {
-            setTimeout(translateVisibleBlocklyFlyout, 80);
-        } else {
-            // Reloading the category is the host's own responsibility; do not
-            // mutate Blockly internals. Remove only our visual replacements.
-            document.querySelectorAll('[data-selection-list-ja-original]').forEach(el => {
-                const original = el.getAttribute('data-selection-list-ja-original');
-                if (original !== null) {
-                    el.textContent = original;
-                    el.removeAttribute('data-selection-list-ja-original');
-                    el.style.fontSize = '';
-                }
-            });
-        }
-    }
-
-    function camelWords(text) {
+    function camelWordsForUi(text) {
         let s = normalize(text);
         if (!s) return [];
-        // Preserve separators while splitting identifiers at capital letters.
-        s = s.replace(/([a-z0-9])([A-Z])/g, '$1 $2');
-        s = s.replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2');
-        s = s.replace(/[_\-]+/g, ' ');
+        s = s.replace(/([a-z0-9])([A-Z])/g, "$1 $2");
+        s = s.replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2");
+        s = s.replace(/[_\-]+/g, " ");
         return s.split(/\s+/).filter(Boolean);
     }
 
-    function isSingleLetterToken(text) {
-        return /^[A-Za-z]$/.test(normalize(text));
-    }
-
-    function flyoutLabelTextElement(el) {
-        if (!el || !el.matches?.('.blocklyText')) return null;
-        if (!normalize(el.textContent)) return null;
-        if (el.closest('.blocklyFlyout') === null) return null;
-        return el;
-    }
-
-    async function translateBlocklyLabels(elements) {
-        if (!japaneseUiEnabled || !elements.length) return;
-        const cacheKey = 'selectionListBlocklyLabelTranslationCache_v1';
-        let cache = {};
-        try { cache = JSON.parse(localStorage.getItem(cacheKey) || '{}'); } catch (_) {}
-
-        const jobs = [];
-        for (const el of elements) {
-            const source = normalize(el.textContent);
-            if (!source || isSingleLetterToken(source)) continue;
-            if (el.getAttribute('data-selection-list-ja-original') === null) {
-                el.setAttribute('data-selection-list-ja-original', source);
-            }
-            const words = camelWords(source);
-            const phrase = words.join(' ');
-            if (!phrase || words.length === 1 && isSingleLetterToken(words[0])) continue;
-            jobs.push({ el, source, phrase });
+    function translateBlocklyFlyoutNow() {
+        if (!japaneseUiEnabled) return;
+        const flyouts = [...document.querySelectorAll(".blocklyFlyout")].filter(el => {
+            const cs = getComputedStyle(el);
+            const r = el.getBoundingClientRect();
+            return cs.display !== "none" && cs.visibility !== "hidden" && r.width > 10 && r.height > 10;
+        });
+        if (!flyouts.length) return;
+        const labels = [];
+        for (const flyout of flyouts) {
+            flyout.querySelectorAll(".blocklyText").forEach(el => {
+                if (el.getAttribute("data-selection-list-ja-original") !== null) return;
+                const source = normalize(el.textContent);
+                if (!source || /^[A-Za-z]$/.test(source)) return;
+                labels.push(el);
+            });
         }
-        if (!jobs.length) return;
+        if (!labels.length) return;
+        translateBlocklyFlyoutLabels(labels).catch(() => {});
+    }
 
-        const unique = [...new Set(jobs.map(j => j.phrase))];
+    async function translateBlocklyFlyoutLabels(labels) {
+        const cacheKey = "selectionListBlocklyFlyoutTranslationCache_v2";
+        let cache = {};
+        try { cache = JSON.parse(localStorage.getItem(cacheKey) || "{}"); } catch (_) {}
+        const jobs = labels.map(el => {
+            const source = normalize(el.textContent);
+            if (el.getAttribute("data-selection-list-ja-original") === null) {
+                el.setAttribute("data-selection-list-ja-original", source);
+            }
+            const words = camelWordsForUi(source);
+            return { el, source, phrase: words.join(" ") };
+        }).filter(x => x.phrase && !/^[A-Za-z]$/.test(x.phrase));
+        const unique = [...new Set(jobs.map(x => x.phrase))];
         const result = new Map();
         const pending = [];
-        for (const phrase of unique) {
-            if (typeof cache[phrase] === 'string' && cache[phrase]) result.set(phrase, cache[phrase]);
+        unique.forEach(phrase => {
+            if (typeof cache[phrase] === "string" && cache[phrase]) result.set(phrase, cache[phrase]);
             else pending.push(phrase);
-        }
-
-        for (let i = 0; i < pending.length; i += 8) {
-            const batch = pending.slice(i, i + 8);
+        });
+        for (let i = 0; i < pending.length; i += 6) {
+            const batch = pending.slice(i, i + 6);
             try {
-                const raw = await translateTextBatch(batch.join('\n'));
+                const raw = await translateTextBatch(batch.join("\n"));
                 const parts = raw.split(/\r?\n/);
                 if (parts.length === batch.length) {
                     batch.forEach((phrase, n) => {
                         const value = applyTranslationCorrection(phrase, parts[n]) || phrase;
-                        result.set(phrase, value);
-                        cache[phrase] = value;
+                        result.set(phrase, value); cache[phrase] = value;
                     });
                 } else {
                     for (const phrase of batch) {
-                        try {
-                            const value = applyTranslationCorrection(phrase, await translateTextBatch(phrase)) || phrase;
-                            result.set(phrase, value); cache[phrase] = value;
-                        } catch (_) { result.set(phrase, phrase); }
+                        const value = applyTranslationCorrection(phrase, await translateTextBatch(phrase)) || phrase;
+                        result.set(phrase, value); cache[phrase] = value;
                     }
                 }
-            } catch (_) {
-                for (const phrase of batch) result.set(phrase, phrase);
-            }
+            } catch (_) {}
             await new Promise(resolve => setTimeout(resolve, 0));
         }
         try { localStorage.setItem(cacheKey, JSON.stringify(cache)); } catch (_) {}
-
-        for (const job of jobs) {
-            if (!job.el.isConnected) continue;
+        jobs.forEach(job => {
             const translated = result.get(job.phrase);
-            if (!translated || translated === job.phrase) continue;
+            if (!job.el.isConnected || !translated || translated === job.phrase) return;
             job.el.textContent = translated;
-            // Blockly text is SVG; reduce font size only when the Japanese text
-            // is visibly wider than the original flyout label.
-            const length = translated.length;
-            let size = 12;
-            if (length > 20) size = 10;
-            else if (length > 14) size = 11;
-            job.el.style.fontSize = `${size}px`;
-        }
-    }
-
-    function translateVisibleBlocklyFlyout() {
-        if (!japaneseUiEnabled) return;
-        const flyouts = [...document.querySelectorAll('.blocklyFlyout')]
-            .filter(el => {
-                const cs = getComputedStyle(el);
-                return cs.display !== 'none' && cs.visibility !== 'hidden';
-            });
-        if (!flyouts.length) return;
-        const labels = [];
-        for (const flyout of flyouts) {
-            flyout.querySelectorAll('.blocklyText').forEach(el => {
-                const label = flyoutLabelTextElement(el);
-                if (label) labels.push(label);
-            });
-        }
-        translateBlocklyLabels([...new Set(labels)]).catch(() => {});
-    }
-
-    let flyoutTranslateTimer = null;
-    function scheduleBlocklyFlyoutTranslation() {
-        if (!japaneseUiEnabled) return;
-        clearTimeout(flyoutTranslateTimer);
-        flyoutTranslateTimer = setTimeout(() => {
-            flyoutTranslateTimer = null;
-            translateVisibleBlocklyFlyout();
-        }, 120);
-    }
-
-    function bindBlocklyJapaneseTranslation() {
-        if (window.__selectionListBlocklyJapaneseBound) return;
-        window.__selectionListBlocklyJapaneseBound = true;
-        document.addEventListener('click', event => {
-            const target = event.target?.closest?.('.blocklyToolboxCategory, .blocklyToolboxCategoryLabel, [role="treeitem"]');
-            if (target) scheduleBlocklyFlyoutTranslation();
-        }, true);
-        document.addEventListener('mouseup', event => {
-            if (event.target?.closest?.('.blocklyToolbox, .blocklyToolboxCategory')) scheduleBlocklyFlyoutTranslation();
-        }, true);
-    }
-
-    function addSelectionListMenu(submenu) {
-        if (!submenu || !submenu.isConnected) return;
-        if (submenu.querySelector('[data-selection-list-plugin="root"]')) return;
-
-        const root = document.createElement("div");
-        root.className = "selection-list-plugin-root";
-        root.setAttribute("data-selection-list-plugin", "root");
-        Object.assign(root.style, {
-            padding: "5px 18px",
-            whiteSpace: "nowrap",
-            background: "rgb(22, 29, 30)",
-            color: "#ffffff",
-            cursor: "pointer",
-            fontSize: "15px",
-            lineHeight: "1.3",
-            borderTop: "1px solid #3a4648",
-            marginTop: "3px",
-            position: "relative"
+            const len = translated.length;
+            job.el.style.fontSize = len > 20 ? "10px" : (len > 14 ? "11px" : "12px");
         });
+    }
 
-        const title = document.createElement("span");
-        title.textContent = "Selection List  ›";
-        root.appendChild(title);
+    let blockJaTimer = null;
+    function scheduleBlocklyFlyoutJapanese() {
+        if (!japaneseUiEnabled) return;
+        clearTimeout(blockJaTimer);
+        blockJaTimer = setTimeout(() => {
+            blockJaTimer = null;
+            translateBlocklyFlyoutNow();
+        }, 180);
+    }
 
-        let submenuOpen = false;
-
-        root.addEventListener("mouseenter", event => {
-            root.style.background = "rgb(48,60,62)";
-            if (!submenuOpen) {
-                submenuOpen = true;
-                createFloatingMenu(root, event.clientX, event.clientY);
+    function restoreBlocklyFlyoutEnglish() {
+        document.querySelectorAll('[data-selection-list-ja-original]').forEach(el => {
+            const original = el.getAttribute('data-selection-list-ja-original');
+            if (original !== null) {
+                el.textContent = original;
+                el.removeAttribute('data-selection-list-ja-original');
+                el.style.fontSize = '';
             }
         });
+    }
 
-        root.addEventListener("mouseleave", event => {
-            root.style.background = "rgb(22,29,30)";
-            // Keep the submenu alive while the pointer is over the floating panel.
-            const panel = document.querySelector('[data-selection-list-plugin="floating-root"]');
-            if (panel && event.relatedTarget && panel.contains(event.relatedTarget)) return;
-            submenuOpen = false;
-            removeFloatingMenu();
-        });
+    function setJapaneseUiEnabled(enabled) {
+        japaneseUiEnabled = !!enabled;
+        try { localStorage.setItem(UI_JA_KEY, japaneseUiEnabled ? "1" : "0"); } catch (_) {}
+        if (japaneseUiEnabled) scheduleBlocklyFlyoutJapanese();
+        else restoreBlocklyFlyoutEnglish();
+    }
 
-        // Hover only, matching PORTAL's native Options behavior. If the parent
-        // menu is rebuilt, re-create the three entries from the current cursor.
-        root.addEventListener("mousemove", event => {
-            const panel = document.querySelector('[data-selection-list-plugin="floating-root"]');
-            if (!submenuOpen || !panel) {
-                submenuOpen = true;
-                createFloatingMenu(root, event.clientX, event.clientY);
-            }
-        });
-
-        submenu.appendChild(root);
-
-        // Directly under Options: a single toggle controlling both Help and
-        // Blockly flyout Japanese translation. The host menu itself remains untouched.
-        if (!submenu.querySelector('[data-selection-list-plugin="ja-toggle"]')) {
+    function ensureJapaneseToggleInOptions() {
+        const menus = document.querySelectorAll('.bf6-experience-manager-options-submenu');
+        menus.forEach(menu => {
+            if (menu.querySelector('[data-selection-list-plugin="ja-toggle"]')) return;
             const toggle = menuItem(`ブロック日本語化 ${japaneseUiEnabled ? "ON" : "OFF"}`, () => {
                 setJapaneseUiEnabled(!japaneseUiEnabled);
                 const label = toggle.querySelector('.selection-list-plugin-menu-label');
                 if (label) label.textContent = `ブロック日本語化 ${japaneseUiEnabled ? "ON" : "OFF"}`;
             });
             toggle.setAttribute('data-selection-list-plugin', 'ja-toggle');
-            submenu.appendChild(toggle);
-        }
+            menu.appendChild(toggle);
+        });
+    }
+
+    function bindBlocklyJapaneseTranslation() {
+        if (window.__selectionListBlocklyJapaneseBoundV2) return;
+        window.__selectionListBlocklyJapaneseBoundV2 = true;
+        document.addEventListener('click', event => {
+            const target = event.target?.closest?.('.blocklyToolbox, .blocklyToolboxCategory, .blocklyToolboxCategoryLabel, .blocklyTreeRow, [role="treeitem"]');
+            if (target) scheduleBlocklyFlyoutJapanese();
+        }, true);
+        document.addEventListener('mouseup', event => {
+            if (event.target?.closest?.('.blocklyToolbox, .blocklyToolboxCategory, .blocklyTreeRow')) scheduleBlocklyFlyoutJapanese();
+        }, true);
     }
 
     // ============================================================
@@ -2210,13 +2124,6 @@
         if (window.__selectionListNativeHelpTranslationBound) return;
         window.__selectionListNativeHelpTranslationBound = true;
 
-        // Observe DOM changes without changing the native Help itself.
-        const helpObserver = new MutationObserver(() => {
-            const dialog = findNativeHelpDialogForTranslation();
-            if (dialog) scheduleNativeHelpTranslation();
-        });
-        helpObserver.observe(document.documentElement || document.body, { childList: true, subtree: true });
-
         // Capture the host Help click, but never prevent/replace it.
         document.addEventListener("click", event => {
             const target = event.target?.closest?.('[role="menuitem"], button, [aria-label], li, div, span');
@@ -2227,6 +2134,7 @@
     }
 
     function scan() {
+        ensureJapaneseToggleInOptions();
         const block = getCurrentContextBlock();
         const eligible = isSelectionListBlock(block);
         const submenus = document.querySelectorAll(".bf6-experience-manager-options-submenu");
@@ -2262,6 +2170,8 @@
     }, true);
 
     plugin.initializeWorkspace = async function () {
+        bindNativeHelpTranslation();
+        bindBlocklyJapaneseTranslation();
         startObserver();
         scan();
     };
