@@ -2022,6 +2022,7 @@
     }
 
     async function showFlyoutTooltip(targetElement, rawName) {
+        if (!translationEnabled) return; // ★この行を追加
         const tip = getOrCreateFlyoutTooltip();
         flyoutTooltipTarget = targetElement;
         const targetRect = targetElement.getBoundingClientRect();
