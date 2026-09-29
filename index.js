@@ -684,32 +684,34 @@
     }, 500);
   }
 
-  async function translateTextBatch(text) {
-    const key = String(text ?? "").trim();
-    if (!key) return "";
+    async function translateTextBatch(text) {
+        const key = String(text ?? "").trim();
+        if (!key) return "";
 
-    // 1. キャッシュが存在する場合はAPIを呼ばずに即座に返却（API消費ゼロ）
-    if (Object.prototype.hasOwnProperty.call(masterTranslationCache, key) && masterTranslationCache[key]) {
-      return masterTranslationCache[key];
+        const cached = masterTranslationCache[key];
+
+        // 1. キャッシュが存在し、かつ「原文と同一（未翻訳）」ではない場合のみキャッシュを即返却
+        if (cached && cached !== key) {
+            return cached;
+        }
+
+        // 2. キャッシュが無い、または「キャッシュが原文のまま」の場合はAPIで再翻訳を実行
+        const endpoint = "https://translate.googleapis.com/translate_a/single";
+        const url = endpoint + "?client=gtx&sl=auto&tl=ja&dt=t&q=" + encodeURIComponent(key);
+        const response = await fetch(url, { method: "GET", credentials: "omit" });
+        if (!response.ok) throw new Error(`Translation HTTP ${response.status}`);
+        const data = await response.json();
+        if (!Array.isArray(data) || !Array.isArray(data[0])) throw new Error("Unexpected translation response");
+
+        const translated = data[0].map(part => Array.isArray(part) ? String(part[0] || "") : "").join("");
+
+        // 3. 正しく翻訳できた場合（原文と異なる日本語が得られた場合）のみキャッシュを上書き更新
+        if (translated && translated !== key) {
+            masterTranslationCache[key] = translated;
+            scheduleSaveMasterCache();
+        }
+        return translated || key;
     }
-
-    // 2. キャッシュにない場合のみ翻訳APIへリクエスト
-    const endpoint = "https://translate.googleapis.com/translate_a/single";
-    const url = endpoint + "?client=gtx&sl=auto&tl=ja&dt=t&q=" + encodeURIComponent(key);
-    const response = await fetch(url, { method: "GET", credentials: "omit" });
-    if (!response.ok) throw new Error(`Translation HTTP ${response.status}`);
-    const data = await response.json();
-    if (!Array.isArray(data) || !Array.isArray(data[0])) throw new Error("Unexpected translation response");
-
-    const translated = data[0].map(part => Array.isArray(part) ? String(part[0] || "") : "").join("");
-
-    // 3. 翻訳成功時はマスターキャッシュに記録してローカル保存
-    if (translated) {
-      masterTranslationCache[key] = translated;
-      scheduleSaveMasterCache();
-    }
-    return translated;
-  }
 
     function shouldKeepTranslationToken(token) {
         return /^[A-Za-z]$/.test(String(token || '').trim());
@@ -2015,7 +2017,10 @@
     async function getTranslatedBlockName(rawText) {
         const key = normalize(rawText);
         if (!key) return "";
-        if (flyoutTranslationCache[key]) return flyoutTranslationCache[key];
+
+        // キャッシュが存在し、かつ「英語のまま」ではない場合のみキャッシュを返す
+        const cached = flyoutTranslationCache[key];
+        if (cached && cached !== key) return cached;
 
         // スペース無しのCamelCaseや記号で結合された単語を自然な英語フレーズに分割
         const spaced = splitCamelCaseForTranslation(key);
@@ -2028,9 +2033,13 @@
                 translated = spaced;
             }
         }
-        flyoutTranslationCache[key] = translated;
-        try { localStorage.setItem(flyoutTranslationCacheKey, JSON.stringify(flyoutTranslationCache)); } catch (_) { }
-        return translated;
+
+        // 日本語に翻訳できた場合のみキャッシュを更新（英語のままならキャッシュしない）
+        if (translated && translated !== key) {
+            flyoutTranslationCache[key] = translated;
+            try { localStorage.setItem(flyoutTranslationCacheKey, JSON.stringify(flyoutTranslationCache)); } catch (_) { }
+        }
+        return translated || key;
     }
 
     function positionFlyoutTooltip(targetRect) {
