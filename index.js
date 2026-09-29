@@ -1917,25 +1917,20 @@
         if (!text) return "";
         if (shouldKeepTranslationToken(text)) return text;
 
-        // First use the same correction/cache-aware translation path as the
-        // working Selection_List translation code.
-        let value = "";
+        // 1. 既知の修正辞書にあれば即座にそれを返す
+        const corrected = applyTranslationCorrection(text, "");
+        if (corrected && corrected !== text) return corrected;
+
+        // 2. キャメルケースを空白で分解（例: "OnPlayerDeployed" -> "On Player Deployed"）
+        //    これをしないとGoogle翻訳が1単語として無視し、英語のまま返してきます
+        const spaced = splitCamelWords(text);
+
         try {
-            value = applyTranslationCorrection(text, await translateTextBatch(text));
-        } catch (_) {}
-
-        // If the service returned the identifier unchanged, retry using
-        // explicit word boundaries. This is important for BF6 identifiers.
-        if (!value || value === text) {
-            const spaced = splitCamelWords(text);
-            if (spaced && spaced !== text) {
-                try {
-                    value = applyTranslationCorrection(text, await translateTextBatch(spaced));
-                } catch (_) {}
-            }
+            const translated = await translateTextBatch(spaced || text);
+            return applyTranslationCorrection(text, translated);
+        } catch (_) {
+            return text;
         }
-
-        return normalize(value || text);
     }
 
     function ensureHoverPopup() {
@@ -1996,13 +1991,8 @@
 
     function getFlyoutBlockFromTarget(target) {
         if (!(target instanceof Element)) return null;
-        const block = target.closest(
-            'g.blocklyFlyoutButton, g.blocklyFlyoutLabel, g.blocklyFlyoutBlock, ' +
-            'g.blocklyDraggable, .blocklyFlyoutButton, .blocklyFlyoutLabel, .blocklyFlyoutBlock'
-        );
-        if (!block) return null;
-        const flyout = block.closest?.('.blocklyFlyout, .blocklyFlyoutScrollbar, [class*="blocklyFlyout"]');
-        return flyout ? block : null;
+        // 左メニュー内のブロック、またはドラッグ可能なブロック要素を確実に取得
+        return target.closest('g.blocklyDraggable, [data-id]');
     }
 
     function getFlyoutBlockText(block) {
@@ -2072,20 +2062,19 @@
     }
 
     function findNativeHelpDialog() {
+        // Portalの右側スライドパネル・ヘルプドロワーを捕捉
         const candidates = [...document.querySelectorAll(
-            '[role="dialog"], [aria-modal="true"], .modal, [class*="help" i], [class*="Help"]'
+            'aside, section, [role="dialog"], [aria-modal="true"], [class*="sidebar" i], [class*="drawer" i], [class*="panel" i], [class*="help" i], [class*="Help"]'
         )].filter(isVisibleElement);
 
-        const scored = candidates.map(el => {
+        for (const el of candidates) {
             const text = normalize(el.innerText || el.textContent || "");
-            let score = 0;
-            if (/\bHelp\b|ヘルプ/i.test(text)) score += 10;
-            if (/description|usage|example|説明|使用|例/i.test(text)) score += 8;
-            if (el.querySelector("pre, code")) score += 3;
-            return { el, score, area: el.getBoundingClientRect().width * el.getBoundingClientRect().height };
-        });
-        scored.sort((a,b) => b.score - a.score || b.area - a.area);
-        return scored[0]?.el || null;
+            // ヘルプ画面の文章によく含まれる英語単語を検知
+            if (/(Description|Inputs|Outputs|Returns|Usage|Help|説明)/i.test(text)) {
+                return el;
+            }
+        }
+        return null;
     }
 
     function collectHelpTextNodes(root) {
