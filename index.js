@@ -1916,6 +1916,56 @@
         translateBlocklyFlyoutLabels(labels).catch(() => {});
     }
 
+    // マウスホバーでブロック手前に大きく日本語名を表示するポップアップ
+    let hoverTooltipEl = null;
+    function getHoverTooltip() {
+        if (!hoverTooltipEl) {
+            hoverTooltipEl = document.createElement("div");
+            hoverTooltipEl.setAttribute("data-selection-list-plugin", "hover-tooltip");
+            Object.assign(hoverTooltipEl.style, {
+                position: "fixed",
+                zIndex: "2147483647",
+                padding: "6px 12px",
+                background: "rgba(15, 20, 24, 0.95)",
+                color: "#ffffff",
+                border: "1px solid #4da3ff",
+                borderRadius: "4px",
+                boxShadow: "0 4px 16px rgba(0,0,0,0.6)",
+                fontSize: "14px",
+                fontWeight: "bold",
+                fontFamily: "sans-serif",
+                pointerEvents: "none",
+                display: "none",
+                whiteSpace: "nowrap",
+                transform: "translateY(-100%)",
+                marginTop: "-8px"
+            });
+            document.body.appendChild(hoverTooltipEl);
+        }
+        return hoverTooltipEl;
+    }
+
+    function attachHoverPopup(blockGroup, jaText) {
+        if (!blockGroup) return;
+        blockGroup.dataset.jaTooltip = jaText;
+        if (blockGroup._jaHoverBound) return;
+        blockGroup._jaHoverBound = true;
+
+        blockGroup.addEventListener("mouseenter", (e) => {
+            if (!japaneseUiEnabled || !blockGroup.dataset.jaTooltip) return;
+            const tip = getHoverTooltip();
+            tip.textContent = blockGroup.dataset.jaTooltip;
+            tip.style.display = "block";
+            const rect = blockGroup.getBoundingClientRect();
+            tip.style.left = `${Math.round(rect.left)}px`;
+            tip.style.top = `${Math.round(rect.top)}px`;
+        });
+
+        blockGroup.addEventListener("mouseleave", () => {
+            if (hoverTooltipEl) hoverTooltipEl.style.display = "none";
+        });
+    }
+    
     async function translateBlocklyFlyoutLabels(labels) {
         const cacheKey = "selectionListBlocklyFlyoutTranslationCache_v2";
         let cache = {};
@@ -1955,13 +2005,67 @@
             await new Promise(resolve => setTimeout(resolve, 0));
         }
         try { localStorage.setItem(cacheKey, JSON.stringify(cache)); } catch (_) {}
+        // ホバー時に最前面に出す日本語ポップアップ用要素（1つだけ作って使い回す）
+        let tip = document.getElementById("bf6-block-ja-popup");
+        if (!tip) {
+            tip = document.createElement("div");
+            tip.id = "bf6-block-ja-popup";
+            Object.assign(tip.style, {
+                position: "fixed",
+                zIndex: "2147483647",
+                padding: "8px 14px",
+                background: "rgba(10, 16, 20, 0.95)",
+                color: "#52c4ff",
+                border: "2px solid #52c4ff",
+                borderRadius: "6px",
+                fontSize: "16px",
+                fontWeight: "bold",
+                pointerEvents: "none",
+                display: "none",
+                boxShadow: "0 4px 16px rgba(0,0,0,0.8)",
+                whiteSpace: "nowrap"
+            });
+            document.body.appendChild(tip);
+        }
+
         jobs.forEach(job => {
             const translated = result.get(job.phrase);
             if (!job.el.isConnected || !translated || translated === job.phrase) return;
+
+            // ブロック自体のテキストも日本語に設定
             job.el.textContent = translated;
-            const len = translated.length;
-            job.el.style.fontSize = len > 20 ? "10px" : (len > 14 ? "11px" : "12px");
+            job.el.style.fontSize = "";
+
+            // ブロック全体（マウスが乗るエリア）を取得
+            const blockGroup = job.el.closest("g.blocklyDraggable");
+            if (blockGroup && !blockGroup._jaHoverBound) {
+                blockGroup._jaHoverBound = true;
+
+                // マウスが乗った時に日本語名を大きくポップアップ表示
+                blockGroup.addEventListener("mouseenter", () => {
+                    if (!japaneseUiEnabled) return;
+                    tip.textContent = translated;
+                    tip.style.display = "block";
+                    const rect = blockGroup.getBoundingClientRect();
+                    tip.style.left = Math.max(10, rect.left) + "px";
+                    tip.style.top = Math.max(10, rect.top - 42) + "px";
+                });
+
+                // マウスが離れたら消す
+                blockGroup.addEventListener("mouseleave", () => {
+                    tip.style.display = "none";
+                });
+            }
         });
+
+        // フライアウト（左ブロックメニュー）全体の配置と幅を再レイアウト
+        try {
+            const ws = getWorkspace();
+            const flyout = ws?.getFlyout?.() || ws?.getToolbox?.()?.getFlyout?.();
+            if (flyout && typeof flyout.reflow === "function") {
+                flyout.reflow();
+            }
+        } catch (_) { }
     }
 
     let blockJaTimer = null;
@@ -2036,21 +2140,19 @@
     }
 
     function findNativeHelpDialogForTranslation() {
-        const candidates = [...document.querySelectorAll('[role="dialog"], [aria-modal="true"], [class*="help" i], [class*="Help"]')]
-            .filter(isVisibleHelpElement);
-        if (!candidates.length) return null;
-        const scored = candidates.map(el => {
-            const text = normalize(el.innerText || el.textContent || "");
-            let score = 0;
-            if (/\bHelp\b|ヘルプ/i.test(text)) score += 8;
-            if (/description|usage|example|説明|使用例|例/i.test(text)) score += 6;
-            if (el.matches('[role="dialog"], [aria-modal="true"]')) score += 4;
-            if (el.querySelector('pre, code')) score += 3;
-            const r = el.getBoundingClientRect();
-            return { el, score, area: r.width * r.height };
-        });
-        scored.sort((a, b) => b.score - a.score || b.area - a.area);
-        return scored[0]?.el || null;
+        // Portalのヘルプ画面（サイドパネル、ドロワー、モーダル全般）を検出
+        const candidates = document.querySelectorAll(
+            'aside, section, div[class*="sidebar"], div[class*="drawer"], div[class*="panel"], div[class*="help"], div[class*="Help"], [role="dialog"]'
+        );
+        for (const el of candidates) {
+            if (!isVisibleHelpElement(el)) continue;
+            const txt = (el.innerText || el.textContent || "");
+            // ヘルプ特有の英語キーワード（Description, Inputs, Returns等）が含まれている要素をヘルプと判定
+            if (/(Description|Inputs|Outputs|Returns|Usage)/i.test(txt)) {
+                return el;
+            }
+        }
+        return null;
     }
 
     function collectHelpTextNodes(root) {
@@ -2105,31 +2207,31 @@
     }
 
     function scheduleNativeHelpTranslation() {
+        if (!japaneseUiEnabled) return;
         if (helpTranslationTimer) clearTimeout(helpTranslationTimer);
-        // Let the host finish constructing/populating its normal Help dialog.
-        helpTranslationTimer = setTimeout(async () => {
-            helpTranslationTimer = null;
+
+        // ヘルプ画面が開いて文字が描画される遅延に対応するため時間差で実行
+        const run = async () => {
             const dialog = findNativeHelpDialogForTranslation();
-            if (!dialog) return;
-            await translateNativeHelpDialog(dialog);
-            // Some Help implementations render sections lazily while scrolling.
-            setTimeout(() => {
-                const current = findNativeHelpDialogForTranslation();
-                if (current) translateNativeHelpDialog(current).catch(() => {});
-            }, 500);
-        }, 250);
+            if (dialog) await translateNativeHelpDialog(dialog);
+        };
+        setTimeout(run, 300);
+        setTimeout(run, 800);
+        setTimeout(run, 1500);
     }
 
     function bindNativeHelpTranslation() {
         if (window.__selectionListNativeHelpTranslationBound) return;
         window.__selectionListNativeHelpTranslationBound = true;
 
-        // Capture the host Help click, but never prevent/replace it.
+        // 「Help」ボタンがクリックされたら翻訳を動かす
         document.addEventListener("click", event => {
-            const target = event.target?.closest?.('[role="menuitem"], button, [aria-label], li, div, span');
+            const target = event.target?.closest?.('button, [role="menuitem"], li, div, span, a');
             if (!target) return;
-            const text = normalize(target.innerText || target.textContent || target.getAttribute?.("aria-label") || "");
-            if (text === "Help" || text === "ヘルプ") scheduleNativeHelpTranslation();
+            const text = normalize(target.innerText || target.textContent || "");
+            if (/Help|ヘルプ/i.test(text)) {
+                scheduleNativeHelpTranslation();
+            }
         }, true);
     }
 
