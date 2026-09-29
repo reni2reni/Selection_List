@@ -2104,32 +2104,43 @@
         if (window.__selectionListTooltipTranslationBound) return;
         window.__selectionListTooltipTranslationBound = true;
 
-        const tooltipObserver = new MutationObserver(async () => {
+        // システムの崩れた凡例が被らないよう、日本語化ON時はシステム標準ツールチップを隠す
+        const hideNativeStyle = document.createElement("style");
+        hideNativeStyle.setAttribute("data-selection-list-plugin", "hide-native-tooltip");
+        document.head.appendChild(hideNativeStyle);
+
+        const updateTooltipVisibility = () => {
+            hideNativeStyle.textContent = translationEnabled ? ".blocklyTooltipDiv { display: none !important; }" : "";
+        };
+        updateTooltipVisibility();
+
+        // 日本語化ON/OFF切り替え時にも連動させる
+        document.addEventListener("click", () => setTimeout(updateTooltipVisibility, 50), true);
+
+        // ワークスペース上のブロックにホバーした時に枠付きポップアップを表示
+        document.addEventListener("mouseover", event => {
             if (!translationEnabled) return;
-            const tooltip = document.querySelector(".blocklyTooltipDiv");
-            if (!tooltip || tooltip.style.display === "none" || tooltip.style.visibility === "hidden") return;
+            // ワークスペース上の配置済みブロック（フライアウト外）を検知
+            const blockEl = event.target?.closest?.(".blocklyWorkspace g.blocklyDraggable");
+            if (!blockEl || blockEl.closest(".blocklyFlyout")) return;
+            if (flyoutTooltipTarget === blockEl) return;
 
-            const rawText = normalize(tooltip.textContent);
-            if (!rawText || tooltip.dataset.lastSource === rawText) return;
-            tooltip.dataset.lastSource = rawText; // 監視ループ防止
+            // ブロックIDから正式な型名・識別子を取得（なければ表示テキスト）
+            const id = blockEl.getAttribute?.("data-id") || blockEl.dataset?.id;
+            const block = getBlockFromId(id);
+            const rawName = block?.type || extractBlockLabelFromFlyoutElement(blockEl);
+            if (!rawName || rawName.length < 2) return;
 
-            // 単語分割して日本語に翻訳
-            let translated = await getTranslatedBlockName(rawText);
-            if (!translated || translated === rawText) {
-                try {
-                    translated = await translateTextBatch(splitCamelCaseForTranslation(rawText));
-                } catch (_) { }
+            showFlyoutTooltip(blockEl, rawName);
+        }, true);
+
+        document.addEventListener("mouseout", event => {
+            if (!flyoutTooltipTarget) return;
+            const blockEl = event.target?.closest?.(".blocklyWorkspace g.blocklyDraggable");
+            if (blockEl === flyoutTooltipTarget) {
+                hideFlyoutTooltip();
             }
-
-            // ONのままであれば翻訳後のテキストに差し替え
-            if (translated && translationEnabled && tooltip.dataset.lastSource === rawText) {
-                tooltip.dataset.lastSource = translated;
-                tooltip.textContent = translated;
-            }
-        });
-
-        // ツールチップ要素、またはbodyを監視
-        tooltipObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
+        }, true);
     }
 
     let isScanning = false;
