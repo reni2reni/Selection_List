@@ -717,16 +717,110 @@
         return /^[A-Za-z]$/.test(String(token || '').trim());
     }
 
-    const TRANSLATION_CORRECTIONS = {
-        "OnPlayerDeployed": "オンプレイヤーデプロイド",
+    const BLOCK_DICTIONARY = {
+        // --- 変換ブロック (Conversion) ---
+        "ToString": "テキストに変換 (文字列化)",
+        "ToNumber": "数値に変換",
+        "ToBoolean": "真偽値に変換 (True/False)",
+        "ToBool": "真偽値に変換",
+        "ToVector": "ベクトルに変換 (座標・方向)",
+        "ToPlayer": "プレイヤーに変換",
+        "ToTeam": "チームに変換",
+        "AngleVectors": "角度をベクトルに変換",
+        "DirectionTowards": "目標への方向ベクトル",
+        "DistanceBetween": "2点間の距離",
+        "AbsoluteValue": "絶対値 (正の数に変換)",
+        "DotProduct": "ベクトルの内積",
+        "CrossProduct": "ベクトルの外積",
+        "Normalize": "ベクトルを正規化 (長さを1に)",
+        "Normalized": "正規化ベクトル",
+        "SquareRoot": "平方根 (ルート)",
+        "Round": "四捨五入",
+        "Floor": "切り捨て",
+        "Ceil": "切り上げ",
+        "Ceiling": "切り上げ",
+
+        // --- ユーザーインターフェイス (User Interface / UI) ---
+        "DisplayCustomMessage": "カスタムメッセージを表示",
+        "DisplayNotificationMessage": "通知メッセージを表示",
+        "DisplayWorldLogMessage": "ワールドログに表示",
+        "DisplayHighlightMessage": "ハイライトメッセージを表示",
+        "SetUIWidgetPosition": "UIウィジェットの位置を設定",
+        "SetUIWidgetSize": "UIウィジェットのサイズを設定",
+        "SetUIWidgetColor": "UIウィジェットの色を設定",
+        "SetUIWidgetText": "UIウィジェットのテキストを設定",
+        "SetUIWidgetVisible": "UIウィジェットの表示/非表示を設定",
+        "GetUIWidgetPosition": "UIウィジェットの位置を取得",
+        "GetUIWidgetSize": "UIウィジェットのサイズを取得",
+        "UIWidget": "UIウィジェット",
+        "UI": "ユーザーインターフェース (UI)",
+        "CustomMessage": "カスタムメッセージ",
+        "NotificationMessage": "通知メッセージ",
+        "WorldLogMessage": "ワールドログメッセージ",
+        "HighlightMessage": "ハイライトメッセージ",
+
+        // その他頻出
+        "OnPlayerDeployed": "プレイヤー出撃時"
     };
 
     function applyTranslationCorrection(original, translated) {
         const source = normalize(original);
-        if (Object.prototype.hasOwnProperty.call(TRANSLATION_CORRECTIONS, source)) {
-            return TRANSLATION_CORRECTIONS[source];
-        }
+        if (BLOCK_DICTIONARY[source]) return BLOCK_DICTIONARY[source];
         return normalize(translated) || source;
+    }
+
+    async function getTranslatedBlockName(rawText) {
+        const key = normalize(rawText);
+        if (!key) return "";
+
+        // 1. 専用辞書にあれば即座に完璧な日本語を返す
+        if (BLOCK_DICTIONARY[key]) return BLOCK_DICTIONARY[key];
+
+        // 2. 「To + ○○」の変換ブロックを自動判定 (例: ToLinearValue → Linear Value に変換)
+        const toMatch = key.match(/^To([A-Z][a-zA-Z0-9]+)$/i);
+        if (toMatch) {
+            const targetType = splitCamelCaseForTranslation(toMatch[1]);
+            const targetJa = BLOCK_DICTIONARY[toMatch[1]] || targetType;
+            return `${targetJa} に変換`;
+        }
+
+        // 3. キャッシュ確認（英語のままのキャッシュは無視）
+        const cached = flyoutTranslationCache[key];
+        if (cached && cached !== key && !/^[A-Za-z\s_]+$/.test(cached)) {
+            return cached;
+        }
+
+        // 4. 単語分割してAPI翻訳
+        const spaced = splitCamelCaseForTranslation(key)
+            .replace(/\bUI\b/g, "UIウィジェット")
+            .replace(/\bCustom Message\b/g, "カスタムメッセージ");
+
+        let translated = "";
+        try {
+            translated = await translateTextBatch(spaced);
+        } catch (_) { }
+
+        // 5. APIが英語のまま返してきた場合の日本語フォールバック変換
+        if (!translated || translated === key || /^[A-Za-z\s_]+$/.test(translated)) {
+            translated = spaced
+                .replace(/^Display\s+/i, "")
+                .replace(/^Set\s+/i, "")
+                .replace(/^Get\s+/i, "");
+            // 動詞の補正
+            if (/^Display/i.test(spaced)) translated = `${translated} を表示`;
+            else if (/^Set/i.test(spaced)) translated = `${translated} を設定`;
+            else if (/^Get/i.test(spaced)) translated = `${translated} を取得`;
+            else if (/^Is/i.test(spaced)) translated = `${translated} か判定`;
+        }
+
+        translated = applyTranslationCorrection(key, translated || key);
+
+        // 日本語が含まれている場合のみキャッシュ保存
+        if (translated && !/^[A-Za-z\s_]+$/.test(translated)) {
+            flyoutTranslationCache[key] = translated;
+            try { localStorage.setItem(flyoutTranslationCacheKey, JSON.stringify(flyoutTranslationCache)); } catch (_) { }
+        }
+        return translated;
     }
 
     function splitCamelCaseForTranslation(value) {
