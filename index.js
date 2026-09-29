@@ -1719,6 +1719,49 @@
         return panel;
     }
 
+    // 日本語化機能のON/OFF状態（初期値はON、localStorageで状態保持）
+    let translationEnabled = localStorage.getItem("selection_list_translation_enabled") !== "false";
+
+    function addTranslationToggleMenu(submenu) {
+        if (!submenu) return;
+        let item = submenu.querySelector('[data-selection-list-plugin="toggle-translation"]');
+        if (!item) {
+            item = document.createElement("div");
+            item.setAttribute("data-selection-list-plugin", "toggle-translation");
+            item.className = "selection-list-plugin-menu-item";
+            Object.assign(item.style, {
+                padding: "5px 18px",
+                whiteSpace: "nowrap",
+                background: "rgb(22, 29, 30)",
+                color: "#ffffff",
+                cursor: "pointer",
+                fontSize: "15px",
+                lineHeight: "1.3",
+                borderTop: "1px solid #3a4648",
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center"
+            });
+            item.addEventListener("mouseenter", () => item.style.background = "rgb(48, 60, 62)");
+            item.addEventListener("mouseleave", () => item.style.background = "rgb(22, 29, 30)");
+            item.addEventListener("click", event => {
+                event.preventDefault();
+                event.stopPropagation();
+                translationEnabled = !translationEnabled;
+                localStorage.setItem("selection_list_translation_enabled", String(translationEnabled));
+                updateLabel();
+                // OFFにした時は表示中のポップアップを消去
+                if (!translationEnabled) hideFlyoutTooltip();
+            }, true);
+            submenu.appendChild(item);
+        }
+        function updateLabel() {
+            item.textContent = translationEnabled ? "日本語化: ON (無効化)" : "日本語化: OFF (有効化)";
+            item.style.color = translationEnabled ? "#61c3ff" : "#8e999b";
+        }
+        updateLabel();
+    }
+
     function addSelectionListMenu(submenu) {
         if (!submenu || submenu.querySelector('[data-selection-list-plugin="root"]')) return;
         const item = document.createElement("div");
@@ -1843,6 +1886,7 @@
     }
 
     function scheduleNativeHelpTranslation() {
+        if (!translationEnabled) return; // ★この行を追加
         if (helpTranslationTimer) clearTimeout(helpTranslationTimer);
         helpTranslationTimer = setTimeout(async () => {
             helpTranslationTimer = null;
@@ -2060,12 +2104,19 @@
         const block = getCurrentContextBlock();
         const eligible = isSelectionListBlock(block);
         const submenus = document.querySelectorAll(".bf6-experience-manager-options-submenu");
-        if (!eligible) {
-            submenus.forEach(submenu => submenu.querySelector('[data-selection-list-plugin="root"]')?.remove());
-            removeFloatingMenu();
-            return;
+
+        for (const submenu of submenus) {
+            if (eligible) {
+                addSelectionListMenu(submenu);
+            } else {
+                submenu.querySelector('[data-selection-list-plugin="root"]')?.remove();
+            }
+            // Optionsメニューの一番下に常にON/OFFトグルを追加
+            addTranslationToggleMenu(submenu);
         }
-        for (const submenu of submenus) addSelectionListMenu(submenu);
+        if (!eligible) {
+            removeFloatingMenu();
+        }
     }
 
     function startObserver() {
