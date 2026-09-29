@@ -2001,8 +2001,8 @@
         const tipHeight = flyoutTooltipEl.offsetHeight;
 
         // 対象ブロックの水平方向中央
-        let left = targetRect.left + (targetRect.width / 2) - (tipWidth / 2);
-        // 対象ブロックの「すぐ上」に配置 (マージン8px)
+        let left = targetRect.left;
+        // 対象ブロックのすぐ上 (マージン8px)
         let top = targetRect.top - tipHeight - 8;
 
         // 画面上部からはみ出る場合は、すぐ下に配置
