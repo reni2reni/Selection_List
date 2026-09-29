@@ -1983,7 +1983,6 @@
         const targetRect = targetElement.getBoundingClientRect();
 
         tip._jaTitle.textContent = "翻訳中…";
-        tip._enSub.textContent = rawName;
         tip.style.display = "flex";
         positionFlyoutTooltip(targetRect);
 
