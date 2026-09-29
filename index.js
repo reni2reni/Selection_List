@@ -2132,124 +2132,30 @@
         }
     }
 
-    // ============================================================
-    // ブロックのマウスホバー日本語ポップアップ（常時有効・即時反応）
-    // ============================================================
-    let hoverTooltipEl = null;
-    function getHoverTooltip() {
-        if (!hoverTooltipEl) {
-            hoverTooltipEl = document.createElement("div");
-            hoverTooltipEl.setAttribute("data-selection-list-plugin", "hover-tooltip");
-            Object.assign(hoverTooltipEl.style, {
-                position: "fixed",
-                zIndex: "2147483647",
-                padding: "8px 14px",
-                background: "rgba(10, 16, 20, 0.95)",
-                color: "#52c4ff",
-                border: "2px solid #52c4ff",
-                borderRadius: "6px",
-                fontSize: "15px",
-                fontWeight: "bold",
-                fontFamily: "sans-serif",
-                pointerEvents: "none",
-                display: "none",
-                boxShadow: "0 4px 16px rgba(0,0,0,0.8)",
-                whiteSpace: "nowrap"
-            });
-            document.body.appendChild(hoverTooltipEl);
-        }
-        return hoverTooltipEl;
+    function scheduleHelpTranslation() {
+        if (helpRunTimer) clearTimeout(helpRunTimer);
+        helpRunTimer = setTimeout(async () => {
+            helpRunTimer = null;
+            await translateNativeHelp();
+            // Help content can be rendered after the menu click. One bounded retry.
+            setTimeout(() => translateNativeHelp(), 700);
+        }, 150);
     }
 
-    function camelWordsForUi(text) {
-        let s = normalize(text);
-        if (!s) return [];
-        s = s.replace(/([a-z0-9])([A-Z])/g, "$1 $2");
-        s = s.replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2");
-        s = s.replace(/[_\-]+/g, " ");
-        return s.split(/\s+/).filter(Boolean);
-    }
+    function bindJapaneseMenuTranslation() {
+        if (window.__selectionListJapaneseMenuBoundV2) return;
+        window.__selectionListJapaneseMenuBoundV2 = true;
+        bindBlockHoverPopup();
 
-    // 翻訳キャッシュ
-    const hoverCacheKey = "selectionListHoverJaTranslationCache_v3";
-    let hoverJaCache = {};
-    try { hoverJaCache = JSON.parse(localStorage.getItem(hoverCacheKey) || "{}"); } catch (_) { }
-
-    async function fetchJaTranslation(phrase) {
-        if (hoverJaCache[phrase]) return hoverJaCache[phrase];
-        try {
-            const raw = await translateTextBatch(phrase);
-            const val = applyTranslationCorrection(phrase, raw) || phrase;
-            hoverJaCache[phrase] = val;
-            try { localStorage.setItem(hoverCacheKey, JSON.stringify(hoverJaCache)); } catch (_) { }
-            return val;
-        } catch (_) {
-            return phrase;
-        }
-    }
-
-    // ブロックから英語の識別名を取り出す
-    function getBlockSourceText(blockEl) {
-        if (!blockEl) return "";
-        // 1. Blocklyのテキスト要素から探す
-        const textNodes = blockEl.querySelectorAll("text.blocklyText");
-        for (const t of textNodes) {
-            const txt = normalize(t.textContent);
-            if (txt && !/^[0-9A-Za-z]$/.test(txt) && txt.length > 1) {
-                return txt;
-            }
-        }
-        // 2. ブロック本体のデータから探す
-        const blockId = blockEl.getAttribute("data-id") || blockEl.dataset?.id;
-        const block = getBlockFromId(blockId);
-        if (block?.type) return block.type;
-        return "";
-    }
-
-    // マウス直下の要素をグローバルに監視（SVGの判定漏れを完全に防ぐ）
-    let currentHoverBlock = null;
-    function bindBlocklyHoverPopups() {
-        if (window.__selectionListBlocklyHoverBound) return;
-        window.__selectionListBlocklyHoverBound = true;
-
-        const tip = getHoverTooltip();
-
-        document.addEventListener("mouseover", async event => {
-            // フライアウト（左メニュー）またはワークスペースのブロックを探す
-            const blockEl = event.target?.closest?.("g.blocklyDraggable");
-            if (!blockEl) return;
-            if (currentHoverBlock === blockEl) return;
-            currentHoverBlock = blockEl;
-
-            const source = getBlockSourceText(blockEl);
-            if (!source) return;
-
-            const phrase = camelWordsForUi(source).join(" ");
-            if (!phrase) return;
-
-            // キャッシュにあれば即時表示、なければ翻訳して表示
-            let ja = hoverJaCache[phrase];
-            if (!ja) {
-                ja = await fetchJaTranslation(phrase);
-            }
-
-            // マウスがまだ同じブロックの上にある場合のみ表示
-            if (currentHoverBlock === blockEl && ja) {
-                tip.textContent = ja;
-                tip.style.display = "block";
-                const rect = blockEl.getBoundingClientRect();
-                tip.style.left = Math.max(10, rect.left) + "px";
-                tip.style.top = Math.max(10, rect.top - 38) + "px";
-            }
+        document.addEventListener("click", event => {
+            const target = event.target?.closest?.('[role="menuitem"], button, [aria-label], li, div, span');
+            if (!target) return;
+            const text = normalize(target.innerText || target.textContent || target.getAttribute?.("aria-label") || "");
+            if (text === "Help" || text === "ヘルプ") scheduleHelpTranslation();
         }, true);
 
-        document.addEventListener("mouseout", event => {
-            const blockEl = event.target?.closest?.("g.blocklyDraggable");
-            if (!blockEl) return;
-            if (currentHoverBlock === blockEl) {
-                currentHoverBlock = null;
-                tip.style.display = "none";
-            }
+        document.addEventListener("contextmenu", () => {
+            [0, 100, 250].forEach(delay => setTimeout(addMenuJapaneseToggle, delay));
         }, true);
     }
 
