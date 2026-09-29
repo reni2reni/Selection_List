@@ -1876,290 +1876,265 @@
     }
 
     // ============================================================
-    // Japanese popup translation for Blockly flyout + native Help
-    // Based on the existing working translation functions above.
-    // IMPORTANT: does not modify the actual Blockly block label.
+    // Japanese UI toggle + Blockly flyout translation
+    // Added without replacing any existing Selection_List logic.
     // ============================================================
-    const MENU_JA_KEY = "selectionListMenuJapaneseEnabled_v1";
-    let menuJapaneseEnabled = true;
+    const UI_JA_KEY = "selectionListJapaneseUiEnabled_v2";
+    let japaneseUiEnabled = true;
     try {
-        const saved = localStorage.getItem(MENU_JA_KEY);
-        if (saved !== null) menuJapaneseEnabled = saved !== "0";
+        const saved = localStorage.getItem(UI_JA_KEY);
+        if (saved !== null) japaneseUiEnabled = saved === "1";
     } catch (_) {}
 
-    function saveMenuJapaneseSetting() {
-        try { localStorage.setItem(MENU_JA_KEY, menuJapaneseEnabled ? "1" : "0"); } catch (_) {}
+    function camelWordsForUi(text) {
+        let s = normalize(text);
+        if (!s) return [];
+        s = s.replace(/([a-z0-9])([A-Z])/g, "$1 $2");
+        s = s.replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2");
+        s = s.replace(/[_\-]+/g, " ");
+        return s.split(/\s+/).filter(Boolean);
     }
 
-    const helpOriginalText = new WeakMap();
-    const helpTranslatedText = new WeakMap();
-    let helpRunTimer = null;
-    let helpRunning = false;
+    function translateBlocklyFlyoutNow() {
+        if (!japaneseUiEnabled) return;
+        const flyouts = [...document.querySelectorAll(".blocklyFlyout")].filter(el => {
+            const cs = getComputedStyle(el);
+            const r = el.getBoundingClientRect();
+            return cs.display !== "none" && cs.visibility !== "hidden" && r.width > 10 && r.height > 10;
+        });
+        if (!flyouts.length) return;
+        const labels = [];
+        for (const flyout of flyouts) {
+            flyout.querySelectorAll(".blocklyText").forEach(el => {
+                if (el.getAttribute("data-selection-list-ja-original") !== null) return;
+                const source = normalize(el.textContent);
+                if (!source || /^[A-Za-z]$/.test(source)) return;
+                labels.push(el);
+            });
+        }
+        if (!labels.length) return;
+        translateBlocklyFlyoutLabels(labels).catch(() => {});
+    }
 
-    const popupOriginal = new WeakMap();
-    let hoverPopup = null;
-    let hoverToken = 0;
-    let hoverTimer = null;
+    async function translateBlocklyFlyoutLabels(labels) {
+        const cacheKey = "selectionListBlocklyFlyoutTranslationCache_v2";
+        let cache = {};
+        try { cache = JSON.parse(localStorage.getItem(cacheKey) || "{}"); } catch (_) {}
+        const jobs = labels.map(el => {
+            const source = normalize(el.textContent);
+            if (el.getAttribute("data-selection-list-ja-original") === null) {
+                el.setAttribute("data-selection-list-ja-original", source);
+            }
+            const words = camelWordsForUi(source);
+            return { el, source, phrase: words.join(" ") };
+        }).filter(x => x.phrase && !/^[A-Za-z]$/.test(x.phrase));
+        const unique = [...new Set(jobs.map(x => x.phrase))];
+        const result = new Map();
+        const pending = [];
+        unique.forEach(phrase => {
+            if (typeof cache[phrase] === "string" && cache[phrase]) result.set(phrase, cache[phrase]);
+            else pending.push(phrase);
+        });
+        for (let i = 0; i < pending.length; i += 6) {
+            const batch = pending.slice(i, i + 6);
+            try {
+                const raw = await translateTextBatch(batch.join("\n"));
+                const parts = raw.split(/\r?\n/);
+                if (parts.length === batch.length) {
+                    batch.forEach((phrase, n) => {
+                        const value = applyTranslationCorrection(phrase, parts[n]) || phrase;
+                        result.set(phrase, value); cache[phrase] = value;
+                    });
+                } else {
+                    for (const phrase of batch) {
+                        const value = applyTranslationCorrection(phrase, await translateTextBatch(phrase)) || phrase;
+                        result.set(phrase, value); cache[phrase] = value;
+                    }
+                }
+            } catch (_) {}
+            await new Promise(resolve => setTimeout(resolve, 0));
+        }
+        try { localStorage.setItem(cacheKey, JSON.stringify(cache)); } catch (_) {}
+        jobs.forEach(job => {
+            const translated = result.get(job.phrase);
+            if (!job.el.isConnected || !translated || translated === job.phrase) return;
+            job.el.textContent = translated;
+            const len = translated.length;
+            job.el.style.fontSize = len > 20 ? "10px" : (len > 14 ? "11px" : "12px");
+        });
+    }
 
-    function isVisibleElement(el) {
+    let blockJaTimer = null;
+    function scheduleBlocklyFlyoutJapanese() {
+        if (!japaneseUiEnabled) return;
+        clearTimeout(blockJaTimer);
+        blockJaTimer = setTimeout(() => {
+            blockJaTimer = null;
+            translateBlocklyFlyoutNow();
+        }, 180);
+    }
+
+    function restoreBlocklyFlyoutEnglish() {
+        document.querySelectorAll('[data-selection-list-ja-original]').forEach(el => {
+            const original = el.getAttribute('data-selection-list-ja-original');
+            if (original !== null) {
+                el.textContent = original;
+                el.removeAttribute('data-selection-list-ja-original');
+                el.style.fontSize = '';
+            }
+        });
+    }
+
+    function setJapaneseUiEnabled(enabled) {
+        japaneseUiEnabled = !!enabled;
+        try { localStorage.setItem(UI_JA_KEY, japaneseUiEnabled ? "1" : "0"); } catch (_) {}
+        if (japaneseUiEnabled) scheduleBlocklyFlyoutJapanese();
+        else restoreBlocklyFlyoutEnglish();
+    }
+
+    function ensureJapaneseToggleInOptions() {
+        const menus = document.querySelectorAll('.bf6-experience-manager-options-submenu');
+        menus.forEach(menu => {
+            if (menu.querySelector('[data-selection-list-plugin="ja-toggle"]')) return;
+            const toggle = menuItem(`ブロック日本語化 ${japaneseUiEnabled ? "ON" : "OFF"}`, () => {
+                setJapaneseUiEnabled(!japaneseUiEnabled);
+                const label = toggle.querySelector('.selection-list-plugin-menu-label');
+                if (label) label.textContent = `ブロック日本語化 ${japaneseUiEnabled ? "ON" : "OFF"}`;
+            });
+            toggle.setAttribute('data-selection-list-plugin', 'ja-toggle');
+            menu.appendChild(toggle);
+        });
+    }
+
+    function bindBlocklyJapaneseTranslation() {
+        if (window.__selectionListBlocklyJapaneseBoundV2) return;
+        window.__selectionListBlocklyJapaneseBoundV2 = true;
+        document.addEventListener('click', event => {
+            const target = event.target?.closest?.('.blocklyToolbox, .blocklyToolboxCategory, .blocklyToolboxCategoryLabel, .blocklyTreeRow, [role="treeitem"]');
+            if (target) scheduleBlocklyFlyoutJapanese();
+        }, true);
+        document.addEventListener('mouseup', event => {
+            if (event.target?.closest?.('.blocklyToolbox, .blocklyToolboxCategory, .blocklyTreeRow')) scheduleBlocklyFlyoutJapanese();
+        }, true);
+    }
+
+    // ============================================================
+    // Native Help Japanese translation
+    // - Do not replace or wrap the host Help dialog.
+    // - Do not add a BF6ヘルプ menu item.
+    // - When the host Help is opened, translate its visible text in place.
+    // - CODE/PRE and form controls are kept unchanged so examples remain intact.
+    // ============================================================
+    let helpTranslationRunning = false;
+    let helpTranslationTimer = null;
+
+    function isVisibleHelpElement(el) {
         if (!el || !el.isConnected) return false;
         const cs = getComputedStyle(el);
         const r = el.getBoundingClientRect();
-        return cs.display !== "none" && cs.visibility !== "hidden" && r.width > 2 && r.height > 2;
+        return cs.display !== "none" && cs.visibility !== "hidden" && r.width > 80 && r.height > 60;
     }
 
-    function splitCamelWords(value) {
-        return splitCamelCaseForTranslation(value);
-    }
-
-    async function translateForDisplay(source) {
-        const text = normalize(source);
-        if (!text) return "";
-        if (shouldKeepTranslationToken(text)) return text;
-
-        // 1. 既知の修正辞書にあれば即座にそれを返す
-        const corrected = applyTranslationCorrection(text, "");
-        if (corrected && corrected !== text) return corrected;
-
-        // 2. キャメルケースを空白で分解（例: "OnPlayerDeployed" -> "On Player Deployed"）
-        //    これをしないとGoogle翻訳が1単語として無視し、英語のまま返してきます
-        const spaced = splitCamelWords(text);
-
-        try {
-            const translated = await translateTextBatch(spaced || text);
-            return applyTranslationCorrection(text, translated);
-        } catch (_) {
-            return text;
-        }
-    }
-
-    function ensureHoverPopup() {
-        if (hoverPopup?.isConnected) return hoverPopup;
-        const el = document.createElement("div");
-        el.id = "selection-list-japanese-hover-popup";
-        Object.assign(el.style, {
-            position: "fixed",
-            zIndex: "2147483647",
-            display: "none",
-            maxWidth: "520px",
-            minWidth: "160px",
-            padding: "12px 18px",
-            borderRadius: "8px",
-            background: "rgba(20,20,20,.96)",
-            color: "#fff",
-            fontSize: "24px",
-            fontWeight: "700",
-            lineHeight: "1.35",
-            textAlign: "center",
-            whiteSpace: "normal",
-            wordBreak: "break-word",
-            boxSizing: "border-box",
-            pointerEvents: "none",
-            boxShadow: "0 5px 22px rgba(0,0,0,.45)"
-        });
-        document.body.appendChild(el);
-        hoverPopup = el;
-        return el;
-    }
-
-    function positionHoverPopup(target) {
-        const popup = ensureHoverPopup();
-        const r = target.getBoundingClientRect();
-        // Always prefer ABOVE the block. If there is not enough room, clamp
-        // into the viewport rather than moving it below unless unavoidable.
-        const pw = Math.min(520, Math.max(160, window.innerWidth - 24));
-        popup.style.maxWidth = `${pw}px`;
-        popup.style.left = "0px";
-        popup.style.top = "0px";
-        const pr = popup.getBoundingClientRect();
-        let left = r.left + (r.width - pr.width) / 2;
-        let top = r.top - pr.height - 12;
-        left = Math.max(12, Math.min(left, window.innerWidth - pr.width - 12));
-        if (top < 12) top = 12;
-        popup.style.left = `${Math.round(left)}px`;
-        popup.style.top = `${Math.round(top)}px`;
-    }
-
-    function hideHoverPopup() {
-        hoverToken++;
-        if (hoverTimer) {
-            clearTimeout(hoverTimer);
-            hoverTimer = null;
-        }
-        if (hoverPopup) hoverPopup.style.display = "none";
-    }
-
-    function getFlyoutBlockFromTarget(target) {
-        if (!(target instanceof Element)) return null;
-        // 左メニュー内のブロック、またはドラッグ可能なブロック要素を確実に取得
-        return target.closest('g.blocklyDraggable, [data-id]');
-    }
-
-    function getFlyoutBlockText(block) {
-        if (!block) return "";
-        const texts = [...block.querySelectorAll("text, .blocklyText")];
-        const values = texts
-            .map(el => normalize(el.textContent))
-            .filter(v => v && !shouldKeepTranslationToken(v));
-        if (values.length) return values.join(" ");
-        return normalize(block.textContent);
-    }
-
-    async function showBlockJapanesePopup(block) {
-        const source = getFlyoutBlockText(block);
-        if (!source) return;
-
-        const token = ++hoverToken;
-        const popup = ensureHoverPopup();
-        popup.textContent = "日本語化中…";
-        popup.style.display = "block";
-        positionHoverPopup(block);
-
-        // Give the browser a paint opportunity before the network request.
-        await yieldToUI();
-        if (token !== hoverToken || !block.isConnected) return;
-
-        const translated = await Promise.race([
-            translateForDisplay(source),
-            new Promise(resolve => setTimeout(() => resolve(""), 5000))
-        ]);
-
-        if (token !== hoverToken || !block.isConnected) return;
-        popup.textContent = translated && translated !== source
-            ? translated
-            : splitCamelWords(source);
-        positionHoverPopup(block);
-    }
-
-    function bindBlockHoverPopup() {
-        if (window.__selectionListBlockHoverPopupBound) return;
-        window.__selectionListBlockHoverPopupBound = true;
-
-        document.addEventListener("pointerover", event => {
-            const block = getFlyoutBlockFromTarget(event.target);
-            if (!block) return;
-            const related = event.relatedTarget;
-            if (related instanceof Node && block.contains(related)) return;
-
-            hideHoverPopup();
-            const token = ++hoverToken;
-            hoverTimer = setTimeout(() => {
-                hoverTimer = null;
-                if (token === hoverToken) showBlockJapanesePopup(block);
-            }, 60);
-        }, true);
-
-        document.addEventListener("pointerout", event => {
-            const block = getFlyoutBlockFromTarget(event.target);
-            if (!block) return;
-            const related = event.relatedTarget;
-            if (related instanceof Node && block.contains(related)) return;
-            hideHoverPopup();
-        }, true);
-
-        window.addEventListener("scroll", hideHoverPopup, true);
-        window.addEventListener("resize", hideHoverPopup);
-    }
-
-    function findNativeHelpDialog() {
-        // Portalの右側スライドパネル・ヘルプドロワーを捕捉
-        const candidates = [...document.querySelectorAll(
-            'aside, section, [role="dialog"], [aria-modal="true"], [class*="sidebar" i], [class*="drawer" i], [class*="panel" i], [class*="help" i], [class*="Help"]'
-        )].filter(isVisibleElement);
-
-        for (const el of candidates) {
+    function findNativeHelpDialogForTranslation() {
+        const candidates = [...document.querySelectorAll('[role="dialog"], [aria-modal="true"], [class*="help" i], [class*="Help"]')]
+            .filter(isVisibleHelpElement);
+        if (!candidates.length) return null;
+        const scored = candidates.map(el => {
             const text = normalize(el.innerText || el.textContent || "");
-            // ヘルプ画面の文章によく含まれる英語単語を検知
-            if (/(Description|Inputs|Outputs|Returns|Usage|Help|説明)/i.test(text)) {
-                return el;
-            }
-        }
-        return null;
+            let score = 0;
+            if (/\bHelp\b|ヘルプ/i.test(text)) score += 8;
+            if (/description|usage|example|説明|使用例|例/i.test(text)) score += 6;
+            if (el.matches('[role="dialog"], [aria-modal="true"]')) score += 4;
+            if (el.querySelector('pre, code')) score += 3;
+            const r = el.getBoundingClientRect();
+            return { el, score, area: r.width * r.height };
+        });
+        scored.sort((a, b) => b.score - a.score || b.area - a.area);
+        return scored[0]?.el || null;
     }
 
     function collectHelpTextNodes(root) {
-        if (!root) return [];
-        const out = [];
+        const nodes = [];
         const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
         let node;
         while ((node = walker.nextNode())) {
-            const p = node.parentElement;
-            if (!p) continue;
-            if (/^(SCRIPT|STYLE|CODE|PRE|TEXTAREA|INPUT|BUTTON|OPTION)$/.test(p.tagName)) continue;
-            if (p.closest("code,pre,textarea,input,button,.blocklyBlock,.blocklyFlyout,.blocklyWorkspace")) continue;
+            const parent = node.parentElement;
+            if (!parent) continue;
+            if (/^(SCRIPT|STYLE|CODE|PRE|TEXTAREA|INPUT|BUTTON|OPTION)$/.test(parent.tagName)) continue;
+            if (parent.closest('code, pre, textarea, input, button')) continue;
             const text = normalize(node.nodeValue);
-            if (!text || text.length > 500) continue;
-            if (/^[\d\s\-_/.:,()[\]{}]+$/.test(text)) continue;
-            out.push(node);
+            if (!text || /^[\d\s\-_/.:,()[\]{}]+$/.test(text)) continue;
+            nodes.push(node);
         }
-        return out;
+        return nodes;
     }
 
-    async function translateHelpNode(node) {
-        if (!node?.isConnected) return;
-        if (!helpOriginalText.has(node)) helpOriginalText.set(node, node.nodeValue);
-        const source = normalize(helpOriginalText.get(node));
-        if (!source) return;
-
-        const cached = helpTranslatedText.get(node);
-        if (cached && cached.source === source) {
-            node.nodeValue = cached.value;
-            return;
-        }
-
-        const translated = await translateForDisplay(source);
-        if (node.isConnected && translated && translated !== source) {
-            node.nodeValue = translated;
-            helpTranslatedText.set(node, { source, value: translated });
-        }
-    }
-
-    async function translateNativeHelp() {
-        if (helpRunning || !menuJapaneseEnabled) return;
-        const dialog = findNativeHelpDialog();
-        if (!dialog) return;
-
-        helpRunning = true;
+    async function translateNativeHelpDialog(dialog) {
+        if (!dialog || helpTranslationRunning) return;
+        helpTranslationRunning = true;
         try {
             const nodes = collectHelpTextNodes(dialog);
-            // Work in small batches so Help never freezes the page.
-            for (let i = 0; i < nodes.length; i += 4) {
-                await Promise.all(nodes.slice(i, i + 4).map(translateHelpNode));
-                await yieldToUI();
+            const cacheKey = "selectionListNativeHelpTranslationCache_v1";
+            let cache = {};
+            try { cache = JSON.parse(localStorage.getItem(cacheKey) || "{}"); } catch (_) { cache = {}; }
+
+            for (let i = 0; i < nodes.length; i += 10) {
+                const batch = nodes.slice(i, i + 10);
+                await Promise.all(batch.map(async node => {
+                    const source = normalize(node.nodeValue);
+                    if (!source) return;
+                    let translated = applyTranslationCorrection(source, cache[source] || "");
+                    if (!translated || translated === source) {
+                        try {
+                            const raw = await translateTextBatch(source);
+                            translated = applyTranslationCorrection(source, raw);
+                            cache[source] = translated || source;
+                        } catch (_) {
+                            translated = source;
+                        }
+                    }
+                    if (translated && translated !== source && node.isConnected) {
+                        node.nodeValue = translated;
+                    }
+                }));
             }
+            try { localStorage.setItem(cacheKey, JSON.stringify(cache)); } catch (_) {}
         } finally {
-            helpRunning = false;
+            helpTranslationRunning = false;
         }
     }
 
-    function scheduleHelpTranslation() {
-        if (helpRunTimer) clearTimeout(helpRunTimer);
-        helpRunTimer = setTimeout(async () => {
-            helpRunTimer = null;
-            await translateNativeHelp();
-            // Help content can be rendered after the menu click. One bounded retry.
-            setTimeout(() => translateNativeHelp(), 700);
-        }, 150);
+    function scheduleNativeHelpTranslation() {
+        if (helpTranslationTimer) clearTimeout(helpTranslationTimer);
+        // Let the host finish constructing/populating its normal Help dialog.
+        helpTranslationTimer = setTimeout(async () => {
+            helpTranslationTimer = null;
+            const dialog = findNativeHelpDialogForTranslation();
+            if (!dialog) return;
+            await translateNativeHelpDialog(dialog);
+            // Some Help implementations render sections lazily while scrolling.
+            setTimeout(() => {
+                const current = findNativeHelpDialogForTranslation();
+                if (current) translateNativeHelpDialog(current).catch(() => {});
+            }, 500);
+        }, 250);
     }
 
-    function bindJapaneseMenuTranslation() {
-        if (window.__selectionListJapaneseMenuBoundV2) return;
-        window.__selectionListJapaneseMenuBoundV2 = true;
-        bindBlockHoverPopup();
+    function bindNativeHelpTranslation() {
+        if (window.__selectionListNativeHelpTranslationBound) return;
+        window.__selectionListNativeHelpTranslationBound = true;
 
+        // Capture the host Help click, but never prevent/replace it.
         document.addEventListener("click", event => {
             const target = event.target?.closest?.('[role="menuitem"], button, [aria-label], li, div, span');
             if (!target) return;
             const text = normalize(target.innerText || target.textContent || target.getAttribute?.("aria-label") || "");
-            if (text === "Help" || text === "ヘルプ") scheduleHelpTranslation();
-        }, true);
-
-        document.addEventListener("contextmenu", () => {
-            [0, 100, 250].forEach(delay => setTimeout(addMenuJapaneseToggle, delay));
+            if (text === "Help" || text === "ヘルプ") scheduleNativeHelpTranslation();
         }, true);
     }
 
     function scan() {
+        ensureJapaneseToggleInOptions();
         const block = getCurrentContextBlock();
         const eligible = isSelectionListBlock(block);
         const submenus = document.querySelectorAll(".bf6-experience-manager-options-submenu");
@@ -2195,7 +2170,8 @@
     }, true);
 
     plugin.initializeWorkspace = async function () {
-        bindJapaneseMenuTranslation();
+        bindNativeHelpTranslation();
+        bindBlocklyJapaneseTranslation();
         startObserver();
         scan();
     };
