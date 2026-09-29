@@ -2017,11 +2017,13 @@
         flyoutTooltipEl.style.top = `${Math.round(top)}px`;
     }
 
-    async function showFlyoutTooltip(targetElement, rawName) {
-        if (!translationEnabled) return; // ★この行を追加
+    async function showFlyoutTooltip(targetElement, rawName, isWorkspace = false) {
         const tip = getOrCreateFlyoutTooltip();
         flyoutTooltipTarget = targetElement;
         const targetRect = targetElement.getBoundingClientRect();
+
+        // ワークスペース上のブロックは 0.7倍、一覧メニューは通常サイズ
+        tip.style.zoom = isWorkspace ? "0.7" : "1";
 
         tip._jaTitle.textContent = "翻訳中…";
         tip.style.display = "flex";
@@ -2131,7 +2133,7 @@
             const rawName = block?.type || extractBlockLabelFromFlyoutElement(blockEl);
             if (!rawName || rawName.length < 2) return;
 
-            showFlyoutTooltip(blockEl, rawName);
+            showFlyoutTooltip(blockEl, rawName, true); // ★第3引数に true を追加
         }, true);
 
         document.addEventListener("mouseout", event => {
