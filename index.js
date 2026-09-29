@@ -2097,6 +2097,41 @@
         }, true);
     }
 
+    // ============================================================
+    // システムの凡例ポップアップ（ツールチップ）の日本語化
+    // ============================================================
+    function bindNativeTooltipTranslation() {
+        if (window.__selectionListTooltipTranslationBound) return;
+        window.__selectionListTooltipTranslationBound = true;
+
+        const tooltipObserver = new MutationObserver(async () => {
+            if (!translationEnabled) return;
+            const tooltip = document.querySelector(".blocklyTooltipDiv");
+            if (!tooltip || tooltip.style.display === "none" || tooltip.style.visibility === "hidden") return;
+
+            const rawText = normalize(tooltip.textContent);
+            if (!rawText || tooltip.dataset.lastSource === rawText) return;
+            tooltip.dataset.lastSource = rawText; // 監視ループ防止
+
+            // 単語分割して日本語に翻訳
+            let translated = await getTranslatedBlockName(rawText);
+            if (!translated || translated === rawText) {
+                try {
+                    translated = await translateTextBatch(splitCamelCaseForTranslation(rawText));
+                } catch (_) { }
+            }
+
+            // ONのままであれば翻訳後のテキストに差し替え
+            if (translated && translationEnabled && tooltip.dataset.lastSource === rawText) {
+                tooltip.dataset.lastSource = translated;
+                tooltip.textContent = translated;
+            }
+        });
+
+        // ツールチップ要素、またはbodyを監視
+        tooltipObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
+    }
+
     let isScanning = false;
     function scan() {
         if (isScanning) return; // 無限ループ防止ガード
@@ -2148,6 +2183,7 @@
     plugin.initializeWorkspace = async function () {
         bindNativeHelpTranslation();
         bindFlyoutHoverListener();
+        bindNativeTooltipTranslation(); // ★この行を追加
         startObserver();
         scan();
     };
