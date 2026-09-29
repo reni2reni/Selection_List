@@ -684,88 +684,44 @@
     }, 500);
   }
 
-    async function translateTextBatch(text) {
-        const key = String(text ?? "").trim();
-        if (!key) return "";
+  async function translateTextBatch(text) {
+    const key = String(text ?? "").trim();
+    if (!key) return "";
 
-        const cached = masterTranslationCache[key];
-
-        // 1. キャッシュが存在し、かつ「原文と同一（未翻訳）」ではない場合のみキャッシュを即返却
-        if (cached && cached !== key) {
-            return cached;
-        }
-
-        // 2. キャッシュが無い、または「キャッシュが原文のまま」の場合はAPIで再翻訳を実行
-        const endpoint = "https://translate.googleapis.com/translate_a/single";
-        const url = endpoint + "?client=gtx&sl=auto&tl=ja&dt=t&q=" + encodeURIComponent(key);
-        const response = await fetch(url, { method: "GET", credentials: "omit" });
-        if (!response.ok) throw new Error(`Translation HTTP ${response.status}`);
-        const data = await response.json();
-        if (!Array.isArray(data) || !Array.isArray(data[0])) throw new Error("Unexpected translation response");
-
-        const translated = data[0].map(part => Array.isArray(part) ? String(part[0] || "") : "").join("");
-
-        // 3. 正しく翻訳できた場合（原文と異なる日本語が得られた場合）のみキャッシュを上書き更新
-        if (translated && translated !== key) {
-            masterTranslationCache[key] = translated;
-            scheduleSaveMasterCache();
-        }
-        return translated || key;
+    // 1. キャッシュが存在する場合はAPIを呼ばずに即座に返却（API消費ゼロ）
+    if (Object.prototype.hasOwnProperty.call(masterTranslationCache, key) && masterTranslationCache[key]) {
+      return masterTranslationCache[key];
     }
+
+    // 2. キャッシュにない場合のみ翻訳APIへリクエスト
+    const endpoint = "https://translate.googleapis.com/translate_a/single";
+    const url = endpoint + "?client=gtx&sl=auto&tl=ja&dt=t&q=" + encodeURIComponent(key);
+    const response = await fetch(url, { method: "GET", credentials: "omit" });
+    if (!response.ok) throw new Error(`Translation HTTP ${response.status}`);
+    const data = await response.json();
+    if (!Array.isArray(data) || !Array.isArray(data[0])) throw new Error("Unexpected translation response");
+
+    const translated = data[0].map(part => Array.isArray(part) ? String(part[0] || "") : "").join("");
+
+    // 3. 翻訳成功時はマスターキャッシュに記録してローカル保存
+    if (translated) {
+      masterTranslationCache[key] = translated;
+      scheduleSaveMasterCache();
+    }
+    return translated;
+  }
 
     function shouldKeepTranslationToken(token) {
         return /^[A-Za-z]$/.test(String(token || '').trim());
     }
 
-    const BLOCK_DICTIONARY = {
-        // --- 変換ブロック (Conversion) ---
-        "ToString": "テキストに変換 (文字列化)",
-        "ToNumber": "数値に変換",
-        "ToBoolean": "真偽値に変換 (True/False)",
-        "ToBool": "真偽値に変換",
-        "ToVector": "ベクトルに変換 (座標・方向)",
-        "ToPlayer": "プレイヤーに変換",
-        "ToTeam": "チームに変換",
-        "AngleVectors": "角度をベクトルに変換",
-        "DirectionTowards": "目標への方向ベクトル",
-        "DistanceBetween": "2点間の距離",
-        "AbsoluteValue": "絶対値 (正の数に変換)",
-        "DotProduct": "ベクトルの内積",
-        "CrossProduct": "ベクトルの外積",
-        "Normalize": "ベクトルを正規化 (長さを1に)",
-        "Normalized": "正規化ベクトル",
-        "SquareRoot": "平方根 (ルート)",
-        "Round": "四捨五入",
-        "Floor": "切り捨て",
-        "Ceil": "切り上げ",
-        "Ceiling": "切り上げ",
-
-        // --- ユーザーインターフェイス (User Interface / UI) ---
-        "DisplayCustomMessage": "カスタムメッセージを表示",
-        "DisplayNotificationMessage": "通知メッセージを表示",
-        "DisplayWorldLogMessage": "ワールドログに表示",
-        "DisplayHighlightMessage": "ハイライトメッセージを表示",
-        "SetUIWidgetPosition": "UIウィジェットの位置を設定",
-        "SetUIWidgetSize": "UIウィジェットのサイズを設定",
-        "SetUIWidgetColor": "UIウィジェットの色を設定",
-        "SetUIWidgetText": "UIウィジェットのテキストを設定",
-        "SetUIWidgetVisible": "UIウィジェットの表示/非表示を設定",
-        "GetUIWidgetPosition": "UIウィジェットの位置を取得",
-        "GetUIWidgetSize": "UIウィジェットのサイズを取得",
-        "UIWidget": "UIウィジェット",
-        "UI": "ユーザーインターフェース (UI)",
-        "CustomMessage": "カスタムメッセージ",
-        "NotificationMessage": "通知メッセージ",
-        "WorldLogMessage": "ワールドログメッセージ",
-        "HighlightMessage": "ハイライトメッセージ",
-
-        // その他頻出
-        "OnPlayerDeployed": "プレイヤー出撃時"
+    const TRANSLATION_CORRECTIONS = {
+        "OnPlayerDeployed": "オンプレイヤーデプロイド",
     };
 
     function applyTranslationCorrection(original, translated) {
         const source = normalize(original);
-        if (BLOCK_DICTIONARY[source]) return BLOCK_DICTIONARY[source];
+        if (TRANSLATION_CORRECTIONS[source]) return TRANSLATION_CORRECTIONS[source];
         return normalize(translated) || source;
     }
 
@@ -773,54 +729,29 @@
         const key = normalize(rawText);
         if (!key) return "";
 
-        // 1. 専用辞書にあれば即座に完璧な日本語を返す
-        if (BLOCK_DICTIONARY[key]) return BLOCK_DICTIONARY[key];
-
-        // 2. 「To + ○○」の変換ブロックを自動判定 (例: ToLinearValue → Linear Value に変換)
-        const toMatch = key.match(/^To([A-Z][a-zA-Z0-9]+)$/i);
-        if (toMatch) {
-            const targetType = splitCamelCaseForTranslation(toMatch[1]);
-            const targetJa = BLOCK_DICTIONARY[toMatch[1]] || targetType;
-            return `${targetJa} に変換`;
+        // 1. キャッシュ（手動読み込みJSONなど）が存在すれば最優先でそれを返す
+        if (flyoutTranslationCache[key]) {
+            return flyoutTranslationCache[key];
         }
 
-        // 3. キャッシュ確認（英語のままのキャッシュは無視）
-        const cached = flyoutTranslationCache[key];
-        if (cached && cached !== key && !/^[A-Za-z\s_]+$/.test(cached)) {
-            return cached;
+        // 2. キャッシュにない場合のみ自動翻訳を実行
+        const spaced = splitCamelCaseForTranslation(key);
+        let translated = applyTranslationCorrection(key, "");
+        if (!translated || translated === key) {
+            try {
+                translated = await translateTextBatch(spaced);
+                translated = applyTranslationCorrection(key, translated || spaced);
+            } catch (_) {
+                translated = spaced;
+            }
         }
 
-        // 4. 単語分割してAPI翻訳
-        const spaced = splitCamelCaseForTranslation(key)
-            .replace(/\bUI\b/g, "UIウィジェット")
-            .replace(/\bCustom Message\b/g, "カスタムメッセージ");
-
-        let translated = "";
-        try {
-            translated = await translateTextBatch(spaced);
-        } catch (_) { }
-
-        // 5. APIが英語のまま返してきた場合の日本語フォールバック変換
-        if (!translated || translated === key || /^[A-Za-z\s_]+$/.test(translated)) {
-            translated = spaced
-                .replace(/^Display\s+/i, "")
-                .replace(/^Set\s+/i, "")
-                .replace(/^Get\s+/i, "");
-            // 動詞の補正
-            if (/^Display/i.test(spaced)) translated = `${translated} を表示`;
-            else if (/^Set/i.test(spaced)) translated = `${translated} を設定`;
-            else if (/^Get/i.test(spaced)) translated = `${translated} を取得`;
-            else if (/^Is/i.test(spaced)) translated = `${translated} か判定`;
-        }
-
-        translated = applyTranslationCorrection(key, translated || key);
-
-        // 日本語が含まれている場合のみキャッシュ保存
-        if (translated && !/^[A-Za-z\s_]+$/.test(translated)) {
+        // 取得できたらキャッシュに蓄積
+        if (translated) {
             flyoutTranslationCache[key] = translated;
             try { localStorage.setItem(flyoutTranslationCacheKey, JSON.stringify(flyoutTranslationCache)); } catch (_) { }
         }
-        return translated;
+        return translated || key;
     }
 
     function splitCamelCaseForTranslation(value) {
@@ -1892,6 +1823,129 @@
         submenu.appendChild(item);
     }
 
+    // ============================================================
+    // 日本語キャッシュの保存 (エクスポート) & 読込 (インポート)
+    // ============================================================
+    function exportBlockCacheJson() {
+        const sorted = {};
+        Object.keys(flyoutTranslationCache).sort().forEach(k => {
+            sorted[k] = flyoutTranslationCache[k];
+        });
+        const jsonText = JSON.stringify(sorted, null, 2);
+        const blob = new Blob([jsonText], { type: "application/json;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "block_translation_cache.json";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        alert(`ブロック名の日本語キャッシュ（${Object.keys(sorted).length}件）を保存しました。`);
+    }
+
+    function importBlockCacheJson() {
+        const input = document.createElement("input");
+        input.type = "file";
+        input.accept = ".json,application/json";
+        input.style.display = "none";
+        input.onchange = e => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = ev => {
+                try {
+                    const data = JSON.parse(ev.target.result);
+                    if (!data || typeof data !== "object") throw new Error();
+                    let count = 0;
+                    for (const [k, v] of Object.entries(data)) {
+                        if (typeof v === "string" && v.trim()) {
+                            flyoutTranslationCache[normalize(k)] = v.trim();
+                            count++;
+                        }
+                    }
+                    localStorage.setItem(flyoutTranslationCacheKey, JSON.stringify(flyoutTranslationCache));
+                    alert(`日本語キャッシュ（${count}件）を正常に読み込みました！即座に反映されます。`);
+                } catch (_) {
+                    alert("JSONファイルの形式が正しくありません。");
+                }
+            };
+            reader.readAsText(file, "UTF-8");
+            input.remove();
+        };
+        document.body.appendChild(input);
+        input.click();
+    }
+
+    function removeCacheSubmenu() {
+        document.querySelectorAll('[data-selection-list-plugin="cache-submenu"]').forEach(el => el.remove());
+    }
+
+    function addCacheManagementMenu(submenu) {
+        if (!submenu || submenu.querySelector('[data-selection-list-plugin="cache-root"]')) return;
+
+        const item = document.createElement("div");
+        item.setAttribute("data-selection-list-plugin", "cache-root");
+        item.className = "selection-list-plugin-menu-item";
+        Object.assign(item.style, {
+            padding: "5px 18px",
+            whiteSpace: "nowrap",
+            background: "rgb(22, 29, 30)",
+            color: "#ffffff",
+            cursor: "pointer",
+            fontSize: "15px",
+            lineHeight: "1.3",
+            borderTop: "1px solid #3a4648",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center"
+        });
+        item.textContent = "日本語キャッシュ ▶";
+
+        item.addEventListener("mouseenter", event => {
+            item.style.background = "rgb(48, 60, 62)";
+            removeCacheSubmenu();
+
+            // サブメニュー（保存・読込）を右側に展開
+            const sub = document.createElement("div");
+            sub.setAttribute("data-selection-list-plugin", "cache-submenu");
+            const rect = item.getBoundingClientRect();
+            Object.assign(sub.style, {
+                position: "fixed",
+                left: `${rect.right + 2}px`,
+                top: `${rect.top}px`,
+                minWidth: "160px",
+                background: "rgb(22, 29, 30)",
+                color: "#fff",
+                border: "1px solid #3a4648",
+                boxShadow: "0 3px 14px rgba(0,0,0,.45)",
+                zIndex: "2147483647",
+                display: "flex",
+                flexDirection: "column"
+            });
+
+            sub.appendChild(menuItem("キャッシュを保存 (.json)", () => {
+                exportBlockCacheJson();
+                removeCacheSubmenu();
+            }));
+            sub.appendChild(menuItem("キャッシュを読込 (.json)", () => {
+                importBlockCacheJson();
+                removeCacheSubmenu();
+            }));
+
+            item.appendChild(sub);
+        });
+
+        item.addEventListener("mouseleave", () => {
+            item.style.background = "rgb(22, 29, 30)";
+            setTimeout(() => {
+                if (!item.matches(":hover")) removeCacheSubmenu();
+            }, 200);
+        });
+
+        submenu.appendChild(item);
+    }
+
     function addSelectionListMenu(submenu) {
         if (!submenu || submenu.querySelector('[data-selection-list-plugin="root"]')) return;
         const item = document.createElement("div");
@@ -2111,10 +2165,7 @@
     async function getTranslatedBlockName(rawText) {
         const key = normalize(rawText);
         if (!key) return "";
-
-        // キャッシュが存在し、かつ「英語のまま」ではない場合のみキャッシュを返す
-        const cached = flyoutTranslationCache[key];
-        if (cached && cached !== key) return cached;
+        if (flyoutTranslationCache[key]) return flyoutTranslationCache[key];
 
         // スペース無しのCamelCaseや記号で結合された単語を自然な英語フレーズに分割
         const spaced = splitCamelCaseForTranslation(key);
@@ -2127,13 +2178,9 @@
                 translated = spaced;
             }
         }
-
-        // 日本語に翻訳できた場合のみキャッシュを更新（英語のままならキャッシュしない）
-        if (translated && translated !== key) {
-            flyoutTranslationCache[key] = translated;
-            try { localStorage.setItem(flyoutTranslationCacheKey, JSON.stringify(flyoutTranslationCache)); } catch (_) { }
-        }
-        return translated || key;
+        flyoutTranslationCache[key] = translated;
+        try { localStorage.setItem(flyoutTranslationCacheKey, JSON.stringify(flyoutTranslationCache)); } catch (_) { }
+        return translated;
     }
 
     function positionFlyoutTooltip(targetRect) {
@@ -2317,6 +2364,7 @@
                     submenu.querySelector('[data-selection-list-plugin="root"]')?.remove();
                 }
                 addTranslationToggleMenu(submenu);
+                addCacheManagementMenu(submenu); // ★この行を追加
             }
             if (!eligible) {
                 removeFloatingMenu();
