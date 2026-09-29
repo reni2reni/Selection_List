@@ -2023,7 +2023,20 @@
         const targetRect = targetElement.getBoundingClientRect();
 
         // ワークスペース上のブロックは 0.7倍、一覧メニューは通常サイズ
-        tip.style.zoom = isWorkspace ? "0.7" : "1";
+        tip.style.zoom = "1";
+        if (isWorkspace) {
+            tip.style.padding = "6px 11px";
+            tip.style.minWidth = "130px";
+            tip.style.borderRadius = "6px";
+            tip.style.borderWidth = "1.5px";
+            tip._jaTitle.style.fontSize = "14px";
+        } else {
+            tip.style.padding = "10px 16px";
+            tip.style.minWidth = "200px";
+            tip.style.borderRadius = "8px";
+            tip.style.borderWidth = "2px";
+            tip._jaTitle.style.fontSize = "20px";
+        }
 
         tip._jaTitle.textContent = "翻訳中…";
         tip.style.display = "flex";
