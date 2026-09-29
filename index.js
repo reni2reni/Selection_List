@@ -72,7 +72,7 @@
                     value = display;
                 }
                 if (!display && !value) continue;
-                const key = `${display}\\u0000${value}`;
+                const key = `${display}\u0000${value}`;
                 if (seen.has(key)) continue;
                 seen.add(key);
                 out.push({ display: display || value, value: value || display });
@@ -107,7 +107,6 @@
         for (const list of candidates) {
             for (const option of list) {
                 if (Array.isArray(option)) {
-                    // Blockly dropdown pair: [displayText, value]
                     addUnique(out, seen, option[0]);
                 } else if (option && typeof option === "object") {
                     addUnique(out, seen, option.text);
@@ -192,24 +191,6 @@
         return "";
     }
 
-    // MapsItem -> MAP, while allowing an existing Global variable to win.
-    function variableNameCandidates(block) {
-        const group = getFieldText(block, "VALUE-0");
-        const type = normalize(block?.type || "");
-        const out = [];
-        if (group) {
-            const singular = group.endsWith("s") && group.length > 1 ? group.slice(0, -1) : group;
-            out.push(singular.toUpperCase());
-            out.push(group.toUpperCase());
-        }
-        if (type.endsWith("Item")) {
-            const base = type.slice(0, -4);
-            out.push(base.toUpperCase());
-        }
-        if (type === "MapsItem") out.unshift("MAP");
-        return [...new Set(out.filter(Boolean))];
-    }
-
     function getBaseVariableName(block) {
         const group = getFieldText(block, "VALUE-0");
         const type = normalize(block?.type || "");
@@ -253,7 +234,6 @@
     }
 
     function makeId(prefix, index) {
-        // BF-style IDs do not need to be cryptographically random for clipboard import.
         const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()_+=[]{};:,.?";
         let s = prefix + String(index) + "_";
         for (let i = 0; i < 18; i++) s += chars[Math.floor(Math.random() * chars.length)];
@@ -426,9 +406,6 @@
                 _bf6Position: { x, y: Number(y.toFixed(6)) }
             };
 
-            // The individual SetVariableAtIndex blocks are now nested inside
-            // a collapsed subroutine so a large selection list does not flood
-            // the workspace when the clipboard payload is pasted.
             chunks.push({
                 blocks: [subroutineBlock],
                 sourceIds: [subroutineId],
@@ -457,9 +434,6 @@
     }
 
     async function copyToClipboard(text) {
-        // 本体を変更せず、ブラウザ標準のクリップボードへ書き込む。
-        // 中身は本体の copy-block と同じ Blockly serialization 形式なので、
-        // 本体の通常のPaste処理でそのまま扱える。
         const value = String(text ?? "");
         try {
             if (navigator.clipboard?.writeText) {
@@ -485,43 +459,11 @@
         }
     }
 
-    async function createAndCopy() {
-        const block = lastContextBlock || getBlockFromId(lastContextBlockId);
-        const ja = getPortalLanguage() === "ja";
-        if (!block) {
-            alert(ja ? "右クリックしたブロックを取得できませんでした。" : "Could not get the context block.");
-            return;
-        }
-        const names = extractSelectionItems(block);
-        if (!names.length) {
-            alert(ja ? "このブロックから選択リストの候補を取得できませんでした。" : "No selection-list options could be found on this block.");
-            return;
-        }
-        const payload = await buildClipboard(block, names);
-        const text = JSON.stringify(payload, null, 2);
-        const ok = await copyToClipboard(text);
-        if (!ok) {
-            alert(ja ? "クリップボードへのコピーに失敗しました。" : "Failed to copy to clipboard.");
-            return;
-        }
-        if (names.length > 256) {
-            const count = Math.ceil(names.length / 256);
-            alert(ja
-                ? `${names.length}個の選択肢を256個ずつ${count}個の配列変数に分割し、それぞれを折りたたんだサブルーチンに入れてクリップボードへコピーしました。`
-                : `Copied ${names.length} options split into ${count} array variables, with each chunk wrapped in a collapsed subroutine.`);
-        } else {
-            alert(ja
-                ? `${names.length}個の選択肢を配列変数「${findGlobalVariable(block).name}」へ入れる展開したサブルーチンをクリップボードにコピーしました。`
-                : `Copied ${names.length} blocks for array variable "${findGlobalVariable(block).name}" inside an expanded subroutine to the clipboard.`);
-        }
-    }
-
     function createTextArrayClipboard(block, names) {
         const MAX_ITEMS_PER_ARRAY = 256;
         const pos = getBlockPosition(block);
         const x = Number(pos.x.toFixed(6));
         const base = getBaseVariableName(block);
-        const group = getFieldText(block, "VALUE-0");
         const chunks = [];
         for (let offset = 0, chunkIndex = 0; offset < names.length; offset += MAX_ITEMS_PER_ARRAY, chunkIndex++) {
             const chunk = names.slice(offset, offset + MAX_ITEMS_PER_ARRAY);
@@ -660,7 +602,6 @@
                 if (!changed) walkFields(data);
                 remapSerializedIds(data, `JListNative${i}`);
 
-                // 一時ブロックは画面外へ置き、貼り付け位置は本体側に任せる。
                 try {
                     if (data.x !== undefined) delete data.x;
                     if (data.y !== undefined) delete data.y;
@@ -673,8 +614,6 @@
 
             if (!tempBlocks.length) return false;
 
-            // ここが重要：プラグイン独自のJSONクリップボードではなく、
-            // 本体が通常の「Copy」で使っている copy-block 経路を呼び出す。
             window.dispatchEvent(new CustomEvent("bf6-experience-manager-action", {
                 detail: {
                     action: "copy-block",
@@ -738,9 +677,6 @@
         return /^[A-Za-z]$/.test(String(token || '').trim());
     }
 
-    // Translation corrections: apply these AFTER the translation service.
-    // Add known BF6 identifiers / terminology here instead of changing the
-    // translator itself. Exact matches take priority over API results.
     const TRANSLATION_CORRECTIONS = {
         "OnPlayerDeployed": "オンプレイヤーデプロイド",
     };
@@ -753,15 +689,23 @@
         return normalize(translated) || source;
     }
 
+    function splitCamelCaseForTranslation(value) {
+        const text = normalize(value);
+        if (!text) return "";
+        return text
+            .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+            .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+            .replace(/([A-Za-z])([0-9]+)/g, "$1 $2")
+            .replace(/([0-9]+)([A-Za-z])/g, "$1 $2")
+            .replace(/_+/g, " ")
+            .replace(/\s+/g, " ")
+            .trim();
+    }
+
     async function translateNames(names, progressBar = null) {
         const unique = [...new Set(names.map(normalize).filter(Boolean))];
         const translated = new Map();
 
-        // Selection-list names such as:
-        //   CarSedan_01_Door_RearRight
-        // must NOT be sent to the translator as one phrase.  Each "_"-
-        // separated component is translated independently and then the
-        // original separators are restored.
         const cacheKey = "selectionListTranslationCache_v2_parts";
         let cache = {};
         try { cache = JSON.parse(localStorage.getItem(cacheKey) || "{}"); } catch (_) { cache = {}; }
@@ -789,9 +733,6 @@
             await yieldToUI();
         }
 
-        // Translate individual "_" components.  Batching is still used for
-        // efficiency, but every component is separated by a newline so the
-        // translation endpoint never sees the original compound identifier.
         const BATCH_CHARS = 1200;
         const batches = [];
         let batch = [];
@@ -828,7 +769,6 @@
                 }
             } catch (_) {}
 
-            // If newline mapping is unreliable, retry each component alone.
             for (const part of sourceBatch) {
                 try {
                     const value = String(await translateTextBatch(part)).trim() || part;
@@ -844,12 +784,10 @@
             }
         };
 
-        // A small amount of concurrency keeps large lists practical.
         for (let i = 0; i < batches.length; i += 3) {
             await Promise.all(batches.slice(i, i + 3).map(translateOneBatch));
         }
 
-        // Reassemble each original identifier with "_" unchanged.
         for (const name of unique) {
             const translatedParts = partsForName(name).map(part => {
                 if (!part) return "";
@@ -860,24 +798,7 @@
         }
 
         try { localStorage.setItem(cacheKey, JSON.stringify(cache)); } catch (_) {}
-
         return names.map(name => translated.get(normalize(name)) || normalize(name));
-    }
-
-    // EVENTTYPE identifiers are usually CamelCase (e.g. OnPlayerEnterCapturePoint).
-    // Keep the original identifier for display/copy, but insert spaces at word
-    // boundaries only for the translation request so the translator can
-    // understand the individual English words.
-    function splitCamelCaseForTranslation(value) {
-        const text = normalize(value);
-        if (!text) return "";
-        return text
-            .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
-            .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-            .replace(/([A-Za-z])([0-9]+)/g, "$1 $2")
-            .replace(/([0-9]+)([A-Za-z])/g, "$1 $2")
-            .replace(/\s+/g, " ")
-            .trim();
     }
 
     async function translateEventTypeNames(names, progressBar = null) {
@@ -985,7 +906,7 @@
                 const original = normalize(option.value || option.display);
                 const display = normalize(option.display || option.value);
                 if (!original && !display) continue;
-                const key = `${original}\\u0000${display}`;
+                const key = `${original}\u0000${display}`;
                 if (seen.has(key)) continue;
                 seen.add(key);
                 result.push({ original, display });
@@ -998,7 +919,6 @@
         const progressBar = names.length > 256 ? createLoadingStatus(names.length) : null;
         if (progressBar) updateLoadingStatus(progressBar, 0, names.length);
         const translated = await translateNames(names, progressBar);
-        // 完了時は表示更新を待たず、アラートを出す直前に即時で消す。
         if (progressBar) removeLoadingStatus(progressBar);
         const MAX_ITEMS_PER_ARRAY = 256;
         const pos = getBlockPosition(block);
@@ -1104,20 +1024,6 @@
         }
     }
 
-
-    function sortJapaneseListPairs(pairs) {
-        return [...pairs].sort((a, b) => {
-            const aa = normalize(a.japanese || a.original);
-            const bb = normalize(b.japanese || b.original);
-            const aLatin = /^[A-Za-z0-9]/.test(aa);
-            const bLatin = /^[A-Za-z0-9]/.test(bb);
-            if (aLatin !== bLatin) return aLatin ? -1 : 1;
-            return aa.localeCompare(bb, "ja", { numeric: true, sensitivity: "base" });
-        });
-    }
-
-    // BF6 ExperienceManager本体のコピー処理と同じく、Blocklyの標準シリアライズ結果を
-    // ベースにする。本体そのものは変更せず、プラグイン側で同じブロックデータを生成する。
     function cloneJson(value) {
         try { return JSON.parse(JSON.stringify(value)); } catch (_) { return null; }
     }
@@ -1138,42 +1044,6 @@
         };
         visit(root);
         return root;
-    }
-
-    function buildJListSelectBlock(block, originalName, copyIndex = 0, targetFieldName = "VALUE-1") {
-        const Blockly = getWorkspace() ? (_Blockly || window.Blockly) : (_Blockly || window.Blockly);
-        let data = null;
-        try {
-            data = cloneJson(Blockly?.serialization?.blocks?.save?.(block));
-        } catch (_) {}
-        if (!data) {
-            const type = normalize(block?.type);
-            const group = getFieldText(block, "VALUE-0") || type;
-            data = { type, id: makeId("JList", Date.now() + copyIndex), fields: { "VALUE-0": group, "VALUE-1": normalize(originalName) } };
-        }
-
-        // 本体の copy-block と同じく next はコピー対象から外す。
-        try { if (data && data.next) delete data.next; } catch (_) {}
-
-        // 選択リストの値だけを差し替え、他のフィールド・extraState・mutation等は本体の
-        // シリアライズ結果をそのまま維持する。
-        const wanted = normalize(originalName);
-        let changed = false;
-        if (data.fields && Object.prototype.hasOwnProperty.call(data.fields, targetFieldName)) {
-            data.fields[targetFieldName] = wanted;
-            changed = true;
-        }
-        const walkFields = obj => {
-            if (!obj || typeof obj !== "object") return;
-            if (Array.isArray(obj)) { obj.forEach(walkFields); return; }
-            if (obj.fields && typeof obj.fields === "object" && Object.prototype.hasOwnProperty.call(obj.fields, targetFieldName)) {
-                obj.fields[targetFieldName] = wanted;
-                changed = true;
-            }
-            for (const v of Object.values(obj)) walkFields(v);
-        };
-        if (!changed) walkFields(data);
-        return remapSerializedIds(data, `JList${copyIndex}`);
     }
 
     async function openJListSelect(block, pairs) {
@@ -1274,7 +1144,6 @@
             list.style.display = panelCollapsed ? "none" : "";
             resizeStrip.style.display = panelCollapsed ? "none" : "";
             titleRow.style.marginBottom = panelCollapsed ? "0" : "9px";
-            // 折りたたみ時はタイトルバーだけの高さにする。
             if (panelCollapsed) {
                 panel.dataset.expandedHeight = panel.style.height || "";
                 panel.style.height = "auto";
@@ -1299,7 +1168,6 @@
         titleRow.addEventListener("click", event => {
             if (titleClickMoved) return;
             if (event.target === closeButton || event.target === displayButton || event.target === copySelectedButton) return;
-            // タイトル文字部分をクリックしたら、タイトルバーだけ残して折りたたむ／再表示。
             setPanelCollapsed(!panelCollapsed);
         }, false);
 
@@ -1324,7 +1192,7 @@
         const rows = [];
         const selectedOriginals = new Set();
         let lastSelectedOriginal = null;
-        let displayMode = "jaen"; // jaen: Japanese left / English right, enja: English left / Japanese right
+        let displayMode = "jaen";
         const sortedPairs = () => {
             const copy = [...pairs];
             if (displayMode === "enja") {
@@ -1460,8 +1328,6 @@
             const selected = sortedPairs().filter(pair => selectedOriginals.has(normalize(pair.original || pair.display)));
             if (!selected.length) return;
 
-            // 複数コピーも本体の通常Copy処理を利用する。
-            // Selection_List独自の _bf6MultiBlockClipboard は生成しない。
             const names = selected.map(pair => normalize(pair.original || pair.display));
             const ok = copyViaPortalNative(block, names, isRuleBlock(block) ? "EVENTTYPE" : "VALUE-1");
             if (ok) {
@@ -1481,7 +1347,6 @@
         });
         search.addEventListener("input", updateDisplay);
 
-        // Dedicated bottom resize strip so the bottom-right corner is easy to grab.
         const resizeStrip = document.createElement("div");
         Object.assign(resizeStrip.style, { position: "absolute", left: "0", right: "0", bottom: "0", height: "24px", zIndex: "5", background: "rgba(35,44,46,.96)", borderTop: "1px solid #394447", boxSizing: "border-box" });
         const resizeHandle = document.createElement("div");
@@ -1522,15 +1387,10 @@
         overlay._jlistCleanup = () => {
             document.removeEventListener("mousemove", moveDrag, true); document.removeEventListener("mouseup", endDrag, true);
             document.removeEventListener("mousemove", moveResize, true); document.removeEventListener("mouseup", endResize, true);
-            document.removeEventListener("keydown", jListEscapeHandler, true);
         };
         panel.appendChild(header); panel.appendChild(list); overlay.appendChild(panel); document.body.appendChild(overlay);
         updateDisplay();
         search.focus();
-    }
-
-    function jListEscapeHandler(event) {
-        // JlistSelect is intentionally closed only by its top-right X button.
     }
 
     function removeJListSelectPanel() {
@@ -1538,7 +1398,6 @@
             try { el._jlistCleanup?.(); } catch (_) {}
             el.remove();
         });
-        document.removeEventListener("keydown", jListEscapeHandler, true);
     }
 
     async function openJListSelectFromContext() {
@@ -1579,7 +1438,6 @@
         const progressBar = names.length > 256 ? createLoadingStatus(names.length) : null;
         if (progressBar) updateLoadingStatus(progressBar, 0, names.length);
         const translated = await translateNames(names, progressBar);
-        // 完了時は表示更新を待たず、アラートを出す直前に即時で消す。
         if (progressBar) removeLoadingStatus(progressBar);
         const group = getFieldText(block, "VALUE-0") || getBaseVariableName(block);
         const filename = `${group}_list_EJ.txt`;
@@ -1596,7 +1454,7 @@
             a.remove();
             setTimeout(() => URL.revokeObjectURL(url), 1000);
             alert(getPortalLanguage() === "ja"
-                ? `${names.length}個を「英語","日本語」形式で「${filename}」へ出力しました。`
+                ? `${names.length}個を「英語,日本語」形式で「${filename}」へ出力しました。`
                 : `Exported ${names.length} names as English/Japanese pairs to "${filename}".`);
         } catch (_) {
             alert(getPortalLanguage() === "ja" ? "翻訳付きテキストファイルの出力に失敗しました。" : "Failed to export the translated text file.");
@@ -1637,8 +1495,6 @@
         return lastContextBlock || getBlockFromId(lastContextBlockId);
     }
 
-    // Rule blocks: use the current EVENTTYPE only (e.g. OnPlayerDeployed).
-    // This keeps the plugin focused on the event currently configured on the rule block.
     function isRuleBlock(block) {
         if (!block) return false;
         try {
@@ -1656,9 +1512,6 @@
         const field = block.getField?.("EVENTTYPE");
         if (!field) return [];
 
-        // EVENTTYPE は現在選択されている値ではなく、Blockly の
-        // ドロップダウンが持っている「全イベント候補」を取得する。
-        // 本体の FieldDropdown / menuGenerator が公開している候補を最優先で使う。
         const raw = [];
         try {
             if (typeof field.getOptions === "function") {
@@ -1699,8 +1552,6 @@
             result.push({ original: value, display, japanese: value });
         }
 
-        // 本体のフィールド実装によって候補が getOptions() から取れない場合の保険。
-        // この場合だけ現在値を1件として返す。
         if (!result.length) {
             const eventType = getRuleEventType(block);
             if (eventType) result.push({ original: eventType, display: eventType, japanese: eventType });
@@ -1776,11 +1627,6 @@
         const py = Number.isFinite(clientY) ? clientY : 0;
 
         Object.assign(panel.style, {
-            // Fixed coordinates are based on the cursor position when
-            // Selection List receives hover, with a 26px horizontal offset.
-            // Because the panel remains a descendant of Selection List, the
-            // parent hover state stays active while entering any of the three
-            // entries.
             position: "fixed",
             left: `${Math.max(0, Math.round(px + 26))}px`,
             top: `${Math.max(0, Math.round(py))}px`,
@@ -1796,8 +1642,6 @@
             pointerEvents: "auto"
         });
 
-        // Build all three entries before attaching the panel. This avoids
-        // PORTAL's MutationObserver reacting between individual insertions.
         const ruleMode = isRuleBlock(getCurrentContextBlock());
         const entries = ruleMode ? [
             menuItem("List → JlistSelect", async (event) => {
@@ -1865,22 +1709,46 @@
             })
         ];
         entries.forEach(entry => panel.appendChild(entry));
-
-        // Keep the three-item panel as a child of Selection List itself.
-        // This is important: moving the pointer from Selection List into the
-        // three entries must still count as hovering the parent item, so
-        // PORTAL does not close its Options menu. All three entries are added
-        // before attachment so PORTAL never sees a partially-built submenu.
         anchor.appendChild(panel);
         return panel;
     }
 
+    function addSelectionListMenu(submenu) {
+        if (!submenu || submenu.querySelector('[data-selection-list-plugin="root"]')) return;
+        const item = document.createElement("div");
+        item.setAttribute("data-selection-list-plugin", "root");
+        item.className = "selection-list-plugin-menu-item";
+        Object.assign(item.style, {
+            padding: "5px 18px",
+            whiteSpace: "nowrap",
+            background: "rgb(22, 29, 30)",
+            color: "#ffffff",
+            cursor: "pointer",
+            fontSize: "15px",
+            lineHeight: "1.3",
+            borderTop: "1px solid #3a4648",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center"
+        });
+        const label = document.createElement("span");
+        label.textContent = "Selection List ▶";
+        item.appendChild(label);
+
+        item.addEventListener("mouseenter", event => {
+            item.style.background = "rgb(48, 60, 62)";
+            createFloatingMenu(item, event.clientX || lastContextMenuX, event.clientY || lastContextMenuY);
+        });
+        item.addEventListener("mouseleave", () => {
+            item.style.background = "rgb(22, 29, 30)";
+        });
+        submenu.appendChild(item);
+    }
+
     // ============================================================
     // Native Help Japanese translation
-    // - Do not replace or wrap the host Help dialog.
-    // - Do not add a BF6ヘルプ menu item.
-    // - When the host Help is opened, translate its visible text in place.
-    // - CODE/PRE and form controls are kept unchanged so examples remain intact.
+    // - ブロック内の文字（SVG/プレビュー要素内）はそのまま保持
+    // - 周囲の説明テキスト・ラベルなどその他の文字のみ日本語化
     // ============================================================
     let helpTranslationRunning = false;
     let helpTranslationTimer = null;
@@ -1917,8 +1785,16 @@
         while ((node = walker.nextNode())) {
             const parent = node.parentElement;
             if (!parent) continue;
-            if (/^(SCRIPT|STYLE|CODE|PRE|TEXTAREA|INPUT|BUTTON|OPTION)$/.test(parent.tagName)) continue;
+
+            // 1. コードタグ・フォーム部品を除外
+            if (/^(SCRIPT|STYLE|CODE|PRE|TEXTAREA|INPUT|BUTTON|OPTION|SVG|TEXT|TSPAN|PATH)$/i.test(parent.tagName)) continue;
             if (parent.closest('code, pre, textarea, input, button')) continue;
+
+            // 2. ブロック本体およびブロックプレビュー内部の文字はそのまま保持（除外）
+            if (parent.closest('svg, [class*="blockly" i], [class*="block-preview" i], [class*="blockPreview" i], [class*="blockContainer" i], g.blocklyDraggable, text.blocklyText')) {
+                continue;
+            }
+
             const text = normalize(node.nodeValue);
             if (!text || /^[\d\s\-_/.:,()[\]{}]+$/.test(text)) continue;
             nodes.push(node);
@@ -1931,7 +1807,7 @@
         helpTranslationRunning = true;
         try {
             const nodes = collectHelpTextNodes(dialog);
-            const cacheKey = "selectionListNativeHelpTranslationCache_v1";
+            const cacheKey = "selectionListNativeHelpTranslationCache_v2";
             let cache = {};
             try { cache = JSON.parse(localStorage.getItem(cacheKey) || "{}"); } catch (_) { cache = {}; }
 
@@ -1963,13 +1839,11 @@
 
     function scheduleNativeHelpTranslation() {
         if (helpTranslationTimer) clearTimeout(helpTranslationTimer);
-        // Let the host finish constructing/populating its normal Help dialog.
         helpTranslationTimer = setTimeout(async () => {
             helpTranslationTimer = null;
             const dialog = findNativeHelpDialogForTranslation();
             if (!dialog) return;
             await translateNativeHelpDialog(dialog);
-            // Some Help implementations render sections lazily while scrolling.
             setTimeout(() => {
                 const current = findNativeHelpDialogForTranslation();
                 if (current) translateNativeHelpDialog(current).catch(() => {});
@@ -1981,19 +1855,208 @@
         if (window.__selectionListNativeHelpTranslationBound) return;
         window.__selectionListNativeHelpTranslationBound = true;
 
-        // Observe DOM changes without changing the native Help itself.
         const helpObserver = new MutationObserver(() => {
             const dialog = findNativeHelpDialogForTranslation();
             if (dialog) scheduleNativeHelpTranslation();
         });
         helpObserver.observe(document.documentElement || document.body, { childList: true, subtree: true });
 
-        // Capture the host Help click, but never prevent/replace it.
         document.addEventListener("click", event => {
             const target = event.target?.closest?.('[role="menuitem"], button, [aria-label], li, div, span');
             if (!target) return;
             const text = normalize(target.innerText || target.textContent || target.getAttribute?.("aria-label") || "");
             if (text === "Help" || text === "ヘルプ") scheduleNativeHelpTranslation();
+        }, true);
+    }
+
+    // ============================================================
+    // 左ブロック一覧メニュー（フライアウト）ブロック名の和訳＆拡大ポップアップ表示
+    // - CamelCase/スペース無し単語を自動抽出して日本語訳
+    // - マウスフォーカス（ホバー）で大きく目立つポップアップを表示
+    // ============================================================
+    let flyoutTooltipEl = null;
+    let flyoutTooltipTarget = null;
+    let flyoutTooltipLeaveTimer = null;
+
+    function getOrCreateFlyoutTooltip() {
+        if (flyoutTooltipEl) return flyoutTooltipEl;
+        const tip = document.createElement("div");
+        tip.setAttribute("data-selection-list-plugin", "flyout-tooltip");
+        Object.assign(tip.style, {
+            position: "fixed",
+            zIndex: "2147483647",
+            pointerEvents: "none",
+            background: "rgba(14, 20, 22, 0.96)",
+            color: "#ffffff",
+            border: "2px solid #4da3ff",
+            borderRadius: "8px",
+            padding: "12px 18px",
+            boxShadow: "0 8px 32px rgba(0,0,0,.75)",
+            backdropFilter: "blur(6px)",
+            fontFamily: "'Segoe UI', Meiryo, sans-serif",
+            maxWidth: "460px",
+            minWidth: "220px",
+            display: "none",
+            flexDirection: "column",
+            gap: "6px",
+            transition: "opacity 0.12s ease-out, transform 0.12s ease-out",
+            opacity: "0",
+            transform: "translateY(4px)"
+        });
+
+        const jaTitle = document.createElement("div");
+        jaTitle.className = "flyout-tip-ja";
+        Object.assign(jaTitle.style, {
+            fontSize: "20px",
+            fontWeight: "bold",
+            color: "#61c3ff",
+            lineHeight: "1.35",
+            letterSpacing: "0.5px",
+            wordBreak: "break-word"
+        });
+
+        const enSub = document.createElement("div");
+        enSub.className = "flyout-tip-en";
+        Object.assign(enSub.style, {
+            fontSize: "13px",
+            color: "#a0b2b8",
+            lineHeight: "1.2",
+            fontFamily: "Consolas, monospace"
+        });
+
+        tip.appendChild(jaTitle);
+        tip.appendChild(enSub);
+        document.body.appendChild(tip);
+        flyoutTooltipEl = tip;
+        tip._jaTitle = jaTitle;
+        tip._enSub = enSub;
+        return tip;
+    }
+
+    const flyoutTranslationCacheKey = "selectionListFlyoutBlockTranslationCache_v1";
+    let flyoutTranslationCache = {};
+    try { flyoutTranslationCache = JSON.parse(localStorage.getItem(flyoutTranslationCacheKey) || "{}"); } catch (_) { flyoutTranslationCache = {}; }
+
+    async function getTranslatedBlockName(rawText) {
+        const key = normalize(rawText);
+        if (!key) return "";
+        if (flyoutTranslationCache[key]) return flyoutTranslationCache[key];
+
+        // スペース無しのCamelCaseや記号で結合された単語を自然な英語フレーズに分割
+        const spaced = splitCamelCaseForTranslation(key);
+        let translated = applyTranslationCorrection(key, "");
+        if (!translated || translated === key) {
+            try {
+                translated = await translateTextBatch(spaced);
+                translated = applyTranslationCorrection(key, translated || spaced);
+            } catch (_) {
+                translated = spaced;
+            }
+        }
+        flyoutTranslationCache[key] = translated;
+        try { localStorage.setItem(flyoutTranslationCacheKey, JSON.stringify(flyoutTranslationCache)); } catch (_) {}
+        return translated;
+    }
+
+    function positionFlyoutTooltip(targetRect) {
+        if (!flyoutTooltipEl) return;
+        const margin = 14;
+        let left = targetRect.right + margin;
+        let top = targetRect.top + (targetRect.height / 2) - (flyoutTooltipEl.offsetHeight / 2);
+
+        // 画面右端からはみ出る場合はターゲットの左側へ
+        if (left + flyoutTooltipEl.offsetWidth > window.innerWidth - 10) {
+            left = targetRect.left - flyoutTooltipEl.offsetWidth - margin;
+        }
+        // 画面上下のクリップ補正
+        top = Math.max(10, Math.min(window.innerHeight - flyoutTooltipEl.offsetHeight - 10, top));
+        left = Math.max(10, left);
+
+        flyoutTooltipEl.style.left = `${Math.round(left)}px`;
+        flyoutTooltipEl.style.top = `${Math.round(top)}px`;
+    }
+
+    async function showFlyoutTooltip(targetElement, rawName) {
+        const tip = getOrCreateFlyoutTooltip();
+        flyoutTooltipTarget = targetElement;
+        const targetRect = targetElement.getBoundingClientRect();
+
+        tip._jaTitle.textContent = "翻訳中…";
+        tip._enSub.textContent = rawName;
+        tip.style.display = "flex";
+        positionFlyoutTooltip(targetRect);
+
+        requestAnimationFrame(() => {
+            tip.style.opacity = "1";
+            tip.style.transform = "translateY(0)";
+        });
+
+        const ja = await getTranslatedBlockName(rawName);
+        if (flyoutTooltipTarget === targetElement) {
+            tip._jaTitle.textContent = ja || rawName;
+            positionFlyoutTooltip(targetElement.getBoundingClientRect());
+        }
+    }
+
+    function hideFlyoutTooltip() {
+        if (!flyoutTooltipEl) return;
+        flyoutTooltipTarget = null;
+        flyoutTooltipEl.style.opacity = "0";
+        flyoutTooltipEl.style.transform = "translateY(4px)";
+        clearTimeout(flyoutTooltipLeaveTimer);
+        flyoutTooltipLeaveTimer = setTimeout(() => {
+            if (!flyoutTooltipTarget && flyoutTooltipEl) {
+                flyoutTooltipEl.style.display = "none";
+            }
+        }, 120);
+    }
+
+    function extractBlockLabelFromFlyoutElement(el) {
+        if (!el) return "";
+        // 1. Blockly の blocklyText 要素
+        const textNodes = [...el.querySelectorAll("text.blocklyText")];
+        if (textNodes.length) {
+            const combined = textNodes.map(t => normalize(t.textContent)).filter(Boolean).join(" ");
+            if (combined) return combined;
+        }
+        // 2. ブロックの型名や属性
+        const type = el.getAttribute?.("data-type") || el.dataset?.type;
+        if (type) return type;
+        // 3. 全体テキスト
+        const plain = normalize(el.innerText || el.textContent || "");
+        return plain.split(/\r?\n/)[0]?.trim() || "";
+    }
+
+    function bindFlyoutHoverListener() {
+        if (window.__selectionListFlyoutHoverBound) return;
+        window.__selectionListFlyoutHoverBound = true;
+
+        document.addEventListener("mouseover", event => {
+            // 左メニュー（フライアウト）内のブロック要素を検知
+            const target = event.target?.closest?.(
+                '.blocklyFlyout g.blocklyDraggable, .blocklyFlyoutScrollbar ~ svg g.blocklyDraggable, [class*="flyout" i] g.blocklyDraggable, [class*="flyout" i] [class*="block" i]'
+            );
+            if (!target) {
+                if (flyoutTooltipTarget && !event.target?.closest?.('[data-selection-list-plugin="flyout-tooltip"]')) {
+                    hideFlyoutTooltip();
+                }
+                return;
+            }
+            if (flyoutTooltipTarget === target) return;
+
+            const label = extractBlockLabelFromFlyoutElement(target);
+            if (!label || label.length < 2) return;
+            showFlyoutTooltip(target, label);
+        }, true);
+
+        document.addEventListener("mouseout", event => {
+            if (!flyoutTooltipTarget) return;
+            const target = event.target?.closest?.(
+                '.blocklyFlyout g.blocklyDraggable, .blocklyFlyoutScrollbar ~ svg g.blocklyDraggable, [class*="flyout" i] g.blocklyDraggable, [class*="flyout" i] [class*="block" i]'
+            );
+            if (target === flyoutTooltipTarget) {
+                hideFlyoutTooltip();
+            }
         }, true);
     }
 
@@ -2034,6 +2097,7 @@
 
     plugin.initializeWorkspace = async function () {
         bindNativeHelpTranslation();
+        bindFlyoutHoverListener();
         startObserver();
         scan();
     };
