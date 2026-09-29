@@ -42,7 +42,7 @@
                 const value = field.getOptions(false);
                 if (Array.isArray(value)) candidates.push(value);
             }
-        } catch (_) {}
+        } catch (_) { }
 
         for (const key of ["options_", "options", "menuGenerator_", "menuGenerator", "choices", "values"]) {
             try {
@@ -52,7 +52,7 @@
                     const generated = value.call(field);
                     if (Array.isArray(generated)) candidates.push(generated);
                 }
-            } catch (_) {}
+            } catch (_) { }
         }
 
         const out = [];
@@ -89,7 +89,7 @@
                 const value = field.getOptions(false);
                 if (Array.isArray(value)) candidates.push(value);
             }
-        } catch (_) {}
+        } catch (_) { }
 
         for (const key of ["options_", "options", "menuGenerator_", "menuGenerator", "choices", "values"]) {
             try {
@@ -99,7 +99,7 @@
                     const generated = value.call(field);
                     if (Array.isArray(generated)) candidates.push(generated);
                 }
-            } catch (_) {}
+            } catch (_) { }
         }
 
         const out = [];
@@ -133,13 +133,13 @@
                     }
                 }
             }
-        } catch (_) {}
+        } catch (_) { }
         try {
             if (typeof block.getFields === "function") {
                 const value = block.getFields();
                 if (Array.isArray(value)) fields.push(...value);
             }
-        } catch (_) {}
+        } catch (_) { }
         return [...new Set(fields)];
     }
 
@@ -187,7 +187,7 @@
                 const value = typeof field.getText === "function" ? field.getText() : field.getValue?.();
                 return normalize(value);
             }
-        } catch (_) {}
+        } catch (_) { }
         return "";
     }
 
@@ -229,7 +229,7 @@
                 const hit = vars.find(v => normalize(v?.name).toUpperCase() === candidate.toUpperCase() && normalize(v?.type || "Global") === "Global");
                 if (hit) return { id: hit.getId?.() || hit.id || "", name: hit.name, type: "Global" };
             }
-        } catch (_) {}
+        } catch (_) { }
         return { id: "", name: candidates[0] || "MAP", type: "Global" };
     }
 
@@ -244,7 +244,7 @@
         try {
             const xy = block?.getRelativeToSurfaceXY?.();
             if (xy && Number.isFinite(xy.x) && Number.isFinite(xy.y)) return { x: xy.x, y: xy.y };
-        } catch (_) {}
+        } catch (_) { }
         return { x: 300, y: 300 };
     }
 
@@ -304,7 +304,7 @@
     }
 
     function removeLoadingStatus(el) {
-        try { el?.remove?.(); } catch (_) {}
+        try { el?.remove?.(); } catch (_) { }
     }
 
     async function buildClipboard(block, names) {
@@ -440,7 +440,7 @@
                 await navigator.clipboard.writeText(value);
                 return true;
             }
-        } catch (_) {}
+        } catch (_) { }
         try {
             const ta = document.createElement("textarea");
             ta.value = value;
@@ -560,7 +560,7 @@
             const vars = ws?.getAllVariables?.() || [];
             const hit = vars.find(v => normalize(v?.name).toUpperCase() === normalize(name).toUpperCase() && normalize(v?.type || "Global") === "Global");
             if (hit) return { id: hit.getId?.() || hit.id || "", name: hit.name, type: "Global" };
-        } catch (_) {}
+        } catch (_) { }
         return { id: "", name, type: "Global" };
     }
 
@@ -579,7 +579,7 @@
 
             const base = cloneJson(Blockly.serialization.blocks.save(block));
             if (!base) return false;
-            try { if (base.next) delete base.next; } catch (_) {}
+            try { if (base.next) delete base.next; } catch (_) { }
 
             for (let i = 0; i < names.length; i++) {
                 const data = cloneJson(base);
@@ -606,7 +606,7 @@
                     if (data.x !== undefined) delete data.x;
                     if (data.y !== undefined) delete data.y;
                     if (data._bf6Position) delete data._bf6Position;
-                } catch (_) {}
+                } catch (_) { }
 
                 const created = Blockly.serialization.blocks.append(data, ws);
                 if (created) tempBlocks.push(created);
@@ -627,10 +627,10 @@
             return false;
         } finally {
             for (const temp of tempBlocks) {
-                try { temp.dispose?.(true, true); } catch (_) {}
+                try { temp.dispose?.(true, true); } catch (_) { }
             }
             if (eventsDisabled && Blockly.Events?.enable) Blockly.Events.enable();
-            try { ws.resizeContents?.(); } catch (_) {}
+            try { ws.resizeContents?.(); } catch (_) { }
         }
     }
 
@@ -767,7 +767,7 @@
                     }
                     return;
                 }
-            } catch (_) {}
+            } catch (_) { }
 
             for (const part of sourceBatch) {
                 try {
@@ -797,7 +797,7 @@
             translated.set(name, translatedParts.join("_"));
         }
 
-        try { localStorage.setItem(cacheKey, JSON.stringify(cache)); } catch (_) {}
+        try { localStorage.setItem(cacheKey, JSON.stringify(cache)); } catch (_) { }
         return names.map(name => translated.get(normalize(name)) || normalize(name));
     }
 
@@ -853,7 +853,7 @@
                     }
                     return;
                 }
-            } catch (_) {}
+            } catch (_) { }
 
             for (const item of sourceBatch) {
                 try {
@@ -877,7 +877,7 @@
         for (const name of unique) {
             if (!translated.has(name)) translated.set(name, applyTranslationCorrection(name, cache[name] || name));
         }
-        try { localStorage.setItem(cacheKey, JSON.stringify(cache)); } catch (_) {}
+        try { localStorage.setItem(cacheKey, JSON.stringify(cache)); } catch (_) { }
         return names.map(name => translated.get(normalize(name)) || normalize(name));
     }
 
@@ -938,25 +938,31 @@
                     type: "SetVariableAtIndex",
                     id: makeId("SetJa", offset + localIndex),
                     inputs: {
-                        "VALUE-0": { block: {
-                            type: "variableReferenceBlock",
-                            id: makeId("JaVar", offset + localIndex),
-                            extraState: { isObjectVar: false },
-                            fields: {
-                                OBJECTTYPE: "Global",
-                                VAR: { id: variable.id || makeId("JaVarId", chunkIndex), name: variable.name, type: "Global" }
+                        "VALUE-0": {
+                            block: {
+                                type: "variableReferenceBlock",
+                                id: makeId("JaVar", offset + localIndex),
+                                extraState: { isObjectVar: false },
+                                fields: {
+                                    OBJECTTYPE: "Global",
+                                    VAR: { id: variable.id || makeId("JaVarId", chunkIndex), name: variable.name, type: "Global" }
+                                }
                             }
-                        }},
-                        "VALUE-1": { block: {
-                            type: "Number",
-                            id: makeId("JaNum", offset + localIndex),
-                            fields: { NUM: localIndex }
-                        }},
-                        "VALUE-2": { block: {
-                            type: "Text",
-                            id: makeId("JaText", offset + localIndex),
-                            fields: { TEXT: name }
-                        }}
+                        },
+                        "VALUE-1": {
+                            block: {
+                                type: "Number",
+                                id: makeId("JaNum", offset + localIndex),
+                                fields: { NUM: localIndex }
+                            }
+                        },
+                        "VALUE-2": {
+                            block: {
+                                type: "Text",
+                                id: makeId("JaText", offset + localIndex),
+                                fields: { TEXT: name }
+                            }
+                        }
                     },
                     _bf6Position: { x, y: Number((pos.y + localIndex * 53).toFixed(6)) }
                 };
@@ -1061,7 +1067,7 @@
         panel.setAttribute("data-selection-list-plugin", "jlist-panel");
         const JLIST_LAYOUT_KEY = "selection_list_jlistselect_layout_v1";
         let savedLayout = null;
-        try { savedLayout = JSON.parse(localStorage.getItem(JLIST_LAYOUT_KEY) || "null"); } catch (_) {}
+        try { savedLayout = JSON.parse(localStorage.getItem(JLIST_LAYOUT_KEY) || "null"); } catch (_) { }
         const defaultWidth = Math.max(420, Math.round(window.innerWidth * 0.5));
         const defaultHeight = Math.max(300, window.innerHeight - 24);
         const initialWidth = Number.isFinite(savedLayout?.width) ? Math.max(420, Math.min(savedLayout.width, window.innerWidth - 8)) : defaultWidth;
@@ -1079,7 +1085,7 @@
         });
         const saveLayout = () => {
             const r = panel.getBoundingClientRect();
-            try { localStorage.setItem(JLIST_LAYOUT_KEY, JSON.stringify({ left: Math.round(r.left), top: Math.round(r.top), width: Math.round(r.width), height: Math.round(r.height) })); } catch (_) {}
+            try { localStorage.setItem(JLIST_LAYOUT_KEY, JSON.stringify({ left: Math.round(r.left), top: Math.round(r.top), width: Math.round(r.width), height: Math.round(r.height) })); } catch (_) { }
         };
 
         const header = document.createElement("div");
@@ -1395,7 +1401,7 @@
 
     function removeJListSelectPanel() {
         document.querySelectorAll('[data-selection-list-plugin="jlist-overlay"]').forEach(el => {
-            try { el._jlistCleanup?.(); } catch (_) {}
+            try { el._jlistCleanup?.(); } catch (_) { }
             el.remove();
         });
     }
@@ -1518,7 +1524,7 @@
                 const options = field.getOptions(false);
                 if (Array.isArray(options)) raw.push(...options);
             }
-        } catch (_) {}
+        } catch (_) { }
         for (const key of ["options_", "options", "menuGenerator_", "menuGenerator", "choices", "values"]) {
             try {
                 const value = field[key];
@@ -1527,7 +1533,7 @@
                     const generated = value.call(field);
                     if (Array.isArray(generated)) raw.push(...generated);
                 }
-            } catch (_) {}
+            } catch (_) { }
         }
 
         const result = [];
@@ -1606,14 +1612,14 @@
                 const ctor = normalize(field?.constructor?.name).toLowerCase();
                 if (options.length >= 2 && (name === "value-1" || ctor.includes("dropdown"))) return true;
             }
-        } catch (_) {}
+        } catch (_) { }
         return false;
     }
 
     function removeFloatingMenu() {
         document.querySelectorAll('[data-selection-list-plugin="floating-root"]').forEach(el => el.remove());
         if (floatingMenuObserver) {
-            try { floatingMenuObserver.disconnect(); } catch (_) {}
+            try { floatingMenuObserver.disconnect(); } catch (_) { }
             floatingMenuObserver = null;
         }
     }
@@ -1649,7 +1655,7 @@
                     event?.preventDefault?.();
                     event?.stopPropagation?.();
                     event?.stopImmediatePropagation?.();
-                } catch (_) {}
+                } catch (_) { }
                 setTimeout(() => {
                     openJListSelectFromContext().catch(error => console.error("Selection_List JlistSelect failed", error));
                 }, 0);
@@ -1672,7 +1678,7 @@
                     event?.preventDefault?.();
                     event?.stopPropagation?.();
                     event?.stopImmediatePropagation?.();
-                } catch (_) {}
+                } catch (_) { }
                 setTimeout(() => {
                     openJListSelectFromContext().catch(error => console.error("Selection_List JlistSelect failed", error));
                 }, 0);
@@ -1830,7 +1836,7 @@
                     }
                 }));
             }
-            try { localStorage.setItem(cacheKey, JSON.stringify(cache)); } catch (_) {}
+            try { localStorage.setItem(cacheKey, JSON.stringify(cache)); } catch (_) { }
         } finally {
             helpTranslationRunning = false;
         }
@@ -1846,7 +1852,7 @@
             // スクロールや遅延レンダリングに対応
             setTimeout(() => {
                 const current = findNativeHelpDialogForTranslation();
-                if (current) translateNativeHelpDialog(current).catch(() => {});
+                if (current) translateNativeHelpDialog(current).catch(() => { });
             }, 400);
         }, 150);
     }
@@ -1917,21 +1923,10 @@
             wordBreak: "break-word"
         });
 
-        const enSub = document.createElement("div");
-        enSub.className = "flyout-tip-en";
-        Object.assign(enSub.style, {
-            fontSize: "13px",
-            color: "#a0b2b8",
-            lineHeight: "1.2",
-            fontFamily: "Consolas, monospace"
-        });
-
         tip.appendChild(jaTitle);
-        tip.appendChild(enSub);
         document.body.appendChild(tip);
         flyoutTooltipEl = tip;
         tip._jaTitle = jaTitle;
-        tip._enSub = enSub;
         return tip;
     }
 
@@ -1956,7 +1951,7 @@
             }
         }
         flyoutTranslationCache[key] = translated;
-        try { localStorage.setItem(flyoutTranslationCacheKey, JSON.stringify(flyoutTranslationCache)); } catch (_) {}
+        try { localStorage.setItem(flyoutTranslationCacheKey, JSON.stringify(flyoutTranslationCache)); } catch (_) { }
         return translated;
     }
 
