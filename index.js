@@ -1747,8 +1747,8 @@
 
     // ============================================================
     // Native Help Japanese translation
-    // - ブロック内の文字（SVG/プレビュー要素内）はそのまま保持
-    // - 周囲の説明テキスト・ラベルなどその他の文字のみ日本語化
+    // - ブロックの絵（SVG/CODE/PRE等）の中身はそのまま保持
+    // - それ以外のタイトル、説明文、引数解説等のテキストをすべて日本語化
     // ============================================================
     let helpTranslationRunning = false;
     let helpTranslationTimer = null;
@@ -1757,25 +1757,25 @@
         if (!el || !el.isConnected) return false;
         const cs = getComputedStyle(el);
         const r = el.getBoundingClientRect();
-        return cs.display !== "none" && cs.visibility !== "hidden" && r.width > 80 && r.height > 60;
+        return cs.display !== "none" && cs.visibility !== "hidden" && r.width > 120 && r.height > 80;
     }
 
     function findNativeHelpDialogForTranslation() {
-        const candidates = [...document.querySelectorAll('[role="dialog"], [aria-modal="true"], [class*="help" i], [class*="Help"]')]
+        const candidates = [...document.querySelectorAll('[role="dialog"], [aria-modal="true"], [class*="help" i], [class*="Help"], .modal, .dialog')]
             .filter(isVisibleHelpElement);
         if (!candidates.length) return null;
         const scored = candidates.map(el => {
             const text = normalize(el.innerText || el.textContent || "");
             let score = 0;
-            if (/\bHelp\b|ヘルプ/i.test(text)) score += 8;
-            if (/description|usage|example|説明|使用例|例/i.test(text)) score += 6;
+            if (/\bHelp\b|ヘルプ/i.test(text)) score += 10;
+            if (/description|usage|example|input|output|説明|使用例|例/i.test(text)) score += 6;
             if (el.matches('[role="dialog"], [aria-modal="true"]')) score += 4;
-            if (el.querySelector('pre, code')) score += 3;
+            if (el.querySelector('svg')) score += 2;
             const r = el.getBoundingClientRect();
             return { el, score, area: r.width * r.height };
         });
         scored.sort((a, b) => b.score - a.score || b.area - a.area);
-        return scored[0]?.el || null;
+        return (scored[0] && scored[0].score >= 3) ? scored[0].el : null;
     }
 
     function collectHelpTextNodes(root) {
@@ -1786,14 +1786,13 @@
             const parent = node.parentElement;
             if (!parent) continue;
 
-            // 1. コードタグ・フォーム部品を除外
-            if (/^(SCRIPT|STYLE|CODE|PRE|TEXTAREA|INPUT|BUTTON|OPTION|SVG|TEXT|TSPAN|PATH)$/i.test(parent.tagName)) continue;
-            if (parent.closest('code, pre, textarea, input, button')) continue;
+            // スクリプト、スタイル、入力フォーム要素は除外
+            if (/^(SCRIPT|STYLE|TEXTAREA|INPUT|BUTTON|OPTION)$/i.test(parent.tagName)) continue;
+            if (parent.closest('textarea, input, button')) continue;
 
-            // 2. ブロック本体およびブロックプレビュー内部の文字はそのまま保持（除外）
-            if (parent.closest('svg, [class*="blockly" i], [class*="block-preview" i], [class*="blockPreview" i], [class*="blockContainer" i], g.blocklyDraggable, text.blocklyText')) {
-                continue;
-            }
+            // 重要: 「ブロックの絵（SVG描画）」および「プログラムコード」内部の文字だけを除外
+            // (ダイアログ全体のラッパーではなく、絵の要素そのものだけを除外)
+            if (parent.closest('svg, code, pre')) continue;
 
             const text = normalize(node.nodeValue);
             if (!text || /^[\d\s\-_/.:,()[\]{}]+$/.test(text)) continue;
@@ -1807,7 +1806,7 @@
         helpTranslationRunning = true;
         try {
             const nodes = collectHelpTextNodes(dialog);
-            const cacheKey = "selectionListNativeHelpTranslationCache_v2";
+            const cacheKey = "selectionListNativeHelpTranslationCache_v3";
             let cache = {};
             try { cache = JSON.parse(localStorage.getItem(cacheKey) || "{}"); } catch (_) { cache = {}; }
 
@@ -1844,11 +1843,12 @@
             const dialog = findNativeHelpDialogForTranslation();
             if (!dialog) return;
             await translateNativeHelpDialog(dialog);
+            // スクロールや遅延レンダリングに対応
             setTimeout(() => {
                 const current = findNativeHelpDialogForTranslation();
                 if (current) translateNativeHelpDialog(current).catch(() => {});
-            }, 500);
-        }, 250);
+            }, 400);
+        }, 150);
     }
 
     function bindNativeHelpTranslation() {
@@ -1865,14 +1865,16 @@
             const target = event.target?.closest?.('[role="menuitem"], button, [aria-label], li, div, span');
             if (!target) return;
             const text = normalize(target.innerText || target.textContent || target.getAttribute?.("aria-label") || "");
-            if (text === "Help" || text === "ヘルプ") scheduleNativeHelpTranslation();
+            if (text === "Help" || text === "ヘルプ" || /ヘルプ|Help/i.test(text)) {
+                scheduleNativeHelpTranslation();
+            }
         }, true);
     }
 
     // ============================================================
     // 左ブロック一覧メニュー（フライアウト）ブロック名の和訳＆拡大ポップアップ表示
-    // - CamelCase/スペース無し単語を自動抽出して日本語訳
-    // - マウスフォーカス（ホバー）で大きく目立つポップアップを表示
+    // - スペース無しのCamelCase単語を自動抽出して和訳
+    // - マウスフォーカス（ホバー）でブロックの「すぐ上」に大きく表示
     // ============================================================
     let flyoutTooltipEl = null;
     let flyoutTooltipTarget = null;
@@ -1890,15 +1892,15 @@
             color: "#ffffff",
             border: "2px solid #4da3ff",
             borderRadius: "8px",
-            padding: "12px 18px",
-            boxShadow: "0 8px 32px rgba(0,0,0,.75)",
+            padding: "10px 16px",
+            boxShadow: "0 8px 30px rgba(0,0,0,.75)",
             backdropFilter: "blur(6px)",
             fontFamily: "'Segoe UI', Meiryo, sans-serif",
             maxWidth: "460px",
-            minWidth: "220px",
+            minWidth: "200px",
             display: "none",
             flexDirection: "column",
-            gap: "6px",
+            gap: "5px",
             transition: "opacity 0.12s ease-out, transform 0.12s ease-out",
             opacity: "0",
             transform: "translateY(4px)"
@@ -1910,7 +1912,7 @@
             fontSize: "20px",
             fontWeight: "bold",
             color: "#61c3ff",
-            lineHeight: "1.35",
+            lineHeight: "1.3",
             letterSpacing: "0.5px",
             wordBreak: "break-word"
         });
@@ -1933,7 +1935,7 @@
         return tip;
     }
 
-    const flyoutTranslationCacheKey = "selectionListFlyoutBlockTranslationCache_v1";
+    const flyoutTranslationCacheKey = "selectionListFlyoutBlockTranslationCache_v2";
     let flyoutTranslationCache = {};
     try { flyoutTranslationCache = JSON.parse(localStorage.getItem(flyoutTranslationCacheKey) || "{}"); } catch (_) { flyoutTranslationCache = {}; }
 
@@ -1960,17 +1962,21 @@
 
     function positionFlyoutTooltip(targetRect) {
         if (!flyoutTooltipEl) return;
-        const margin = 14;
-        let left = targetRect.right + margin;
-        let top = targetRect.top + (targetRect.height / 2) - (flyoutTooltipEl.offsetHeight / 2);
+        const tipWidth = flyoutTooltipEl.offsetWidth;
+        const tipHeight = flyoutTooltipEl.offsetHeight;
 
-        // 画面右端からはみ出る場合はターゲットの左側へ
-        if (left + flyoutTooltipEl.offsetWidth > window.innerWidth - 10) {
-            left = targetRect.left - flyoutTooltipEl.offsetWidth - margin;
+        // 対象ブロックの水平方向中央
+        let left = targetRect.left + (targetRect.width / 2) - (tipWidth / 2);
+        // 対象ブロックの「すぐ上」に配置 (マージン8px)
+        let top = targetRect.top - tipHeight - 8;
+
+        // 画面上部からはみ出る場合は、すぐ下に配置
+        if (top < 8) {
+            top = targetRect.bottom + 8;
         }
-        // 画面上下のクリップ補正
-        top = Math.max(10, Math.min(window.innerHeight - flyoutTooltipEl.offsetHeight - 10, top));
-        left = Math.max(10, left);
+
+        // 画面左右のはみ出し補正
+        left = Math.max(10, Math.min(window.innerWidth - tipWidth - 10, left));
 
         flyoutTooltipEl.style.left = `${Math.round(left)}px`;
         flyoutTooltipEl.style.top = `${Math.round(top)}px`;
@@ -2013,16 +2019,13 @@
 
     function extractBlockLabelFromFlyoutElement(el) {
         if (!el) return "";
-        // 1. Blockly の blocklyText 要素
         const textNodes = [...el.querySelectorAll("text.blocklyText")];
         if (textNodes.length) {
             const combined = textNodes.map(t => normalize(t.textContent)).filter(Boolean).join(" ");
             if (combined) return combined;
         }
-        // 2. ブロックの型名や属性
         const type = el.getAttribute?.("data-type") || el.dataset?.type;
         if (type) return type;
-        // 3. 全体テキスト
         const plain = normalize(el.innerText || el.textContent || "");
         return plain.split(/\r?\n/)[0]?.trim() || "";
     }
@@ -2032,7 +2035,6 @@
         window.__selectionListFlyoutHoverBound = true;
 
         document.addEventListener("mouseover", event => {
-            // 左メニュー（フライアウト）内のブロック要素を検知
             const target = event.target?.closest?.(
                 '.blocklyFlyout g.blocklyDraggable, .blocklyFlyoutScrollbar ~ svg g.blocklyDraggable, [class*="flyout" i] g.blocklyDraggable, [class*="flyout" i] [class*="block" i]'
             );
