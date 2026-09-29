@@ -663,15 +663,53 @@
                 : `Copied ${names.length} names as text arrays in ${count} collapsed subroutines.`);
     }
 
-    async function translateTextBatch(text) {
-        const endpoint = "https://translate.googleapis.com/translate_a/single";
-        const url = endpoint + "?client=gtx&sl=auto&tl=ja&dt=t&q=" + encodeURIComponent(text);
-        const response = await fetch(url, { method: "GET", credentials: "omit" });
-        if (!response.ok) throw new Error(`Translation HTTP ${response.status}`);
-        const data = await response.json();
-        if (!Array.isArray(data) || !Array.isArray(data[0])) throw new Error("Unexpected translation response");
-        return data[0].map(part => Array.isArray(part) ? String(part[0] || "") : "").join("");
+  // ============================================================
+  // 翻訳マスターキャッシュ（API規制対策：localStorageに永続保存）
+  // ============================================================
+  const MASTER_TRANSLATION_CACHE_KEY = "selection_list_master_translation_cache_v1";
+  let masterTranslationCache = {};
+  try {
+    masterTranslationCache = JSON.parse(localStorage.getItem(MASTER_TRANSLATION_CACHE_KEY) || "{}");
+  } catch (_) {
+    masterTranslationCache = {};
+  }
+
+  let saveCacheTimer = null;
+  function scheduleSaveMasterCache() {
+    if (saveCacheTimer) clearTimeout(saveCacheTimer);
+    saveCacheTimer = setTimeout(() => {
+      try {
+        localStorage.setItem(MASTER_TRANSLATION_CACHE_KEY, JSON.stringify(masterTranslationCache));
+      } catch (_) { }
+    }, 500);
+  }
+
+  async function translateTextBatch(text) {
+    const key = String(text ?? "").trim();
+    if (!key) return "";
+
+    // 1. キャッシュが存在する場合はAPIを呼ばずに即座に返却（API消費ゼロ）
+    if (Object.prototype.hasOwnProperty.call(masterTranslationCache, key) && masterTranslationCache[key]) {
+      return masterTranslationCache[key];
     }
+
+    // 2. キャッシュにない場合のみ翻訳APIへリクエスト
+    const endpoint = "https://translate.googleapis.com/translate_a/single";
+    const url = endpoint + "?client=gtx&sl=auto&tl=ja&dt=t&q=" + encodeURIComponent(key);
+    const response = await fetch(url, { method: "GET", credentials: "omit" });
+    if (!response.ok) throw new Error(`Translation HTTP ${response.status}`);
+    const data = await response.json();
+    if (!Array.isArray(data) || !Array.isArray(data[0])) throw new Error("Unexpected translation response");
+
+    const translated = data[0].map(part => Array.isArray(part) ? String(part[0] || "") : "").join("");
+
+    // 3. 翻訳成功時はマスターキャッシュに記録してローカル保存
+    if (translated) {
+      masterTranslationCache[key] = translated;
+      scheduleSaveMasterCache();
+    }
+    return translated;
+  }
 
     function shouldKeepTranslationToken(token) {
         return /^[A-Za-z]$/.test(String(token || '').trim());
