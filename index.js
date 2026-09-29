@@ -2085,6 +2085,8 @@
         window.__selectionListFlyoutHoverBound = true;
 
         document.addEventListener("mouseover", event => {
+            if (!translationEnabled) return; // ★この行を追加（OFF時は即座に中断）
+
             const target = event.target?.closest?.(
                 '.blocklyFlyout g.blocklyDraggable, .blocklyFlyoutScrollbar ~ svg g.blocklyDraggable, [class*="flyout" i] g.blocklyDraggable, [class*="flyout" i] [class*="block" i]'
             );
