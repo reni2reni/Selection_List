@@ -2162,26 +2162,6 @@
     let flyoutTranslationCache = {};
     try { flyoutTranslationCache = JSON.parse(localStorage.getItem(flyoutTranslationCacheKey) || "{}"); } catch (_) { flyoutTranslationCache = {}; }
 
-    async function getTranslatedBlockName(rawText) {
-        const key = normalize(rawText);
-        if (!key) return "";
-        if (flyoutTranslationCache[key]) return flyoutTranslationCache[key];
-
-        // スペース無しのCamelCaseや記号で結合された単語を自然な英語フレーズに分割
-        const spaced = splitCamelCaseForTranslation(key);
-        let translated = applyTranslationCorrection(key, "");
-        if (!translated || translated === key) {
-            try {
-                translated = await translateTextBatch(spaced);
-                translated = applyTranslationCorrection(key, translated || spaced);
-            } catch (_) {
-                translated = spaced;
-            }
-        }
-        flyoutTranslationCache[key] = translated;
-        try { localStorage.setItem(flyoutTranslationCacheKey, JSON.stringify(flyoutTranslationCache)); } catch (_) { }
-        return translated;
-    }
 
     function positionFlyoutTooltip(targetRect) {
         if (!flyoutTooltipEl) return;
