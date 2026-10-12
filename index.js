@@ -785,7 +785,8 @@
 
         const pendingParts = [];
         for (const part of partKeys) {
-            if (typeof cache[part] === "string" && cache[part]) {
+            // 日本語で正しく保存されているものだけをスキップ (英語のまま残っているものは再翻訳へ)
+            if (typeof cache[part] === "string" && hasJapanese(cache[part])) {
                 continue;
             }
             pendingParts.push(part);
@@ -822,8 +823,12 @@
 
                 if (parts.length === sourceBatch.length) {
                     sourceBatch.forEach((part, i) => {
-                        const value = String(parts[i] || part).trim() || part;
-                        cache[part] = applyTranslationCorrection(part, value);
+                        const value = String(parts[i] || part).trim();
+                        const corrected = applyTranslationCorrection(part, value);
+                        // ★日本語の時だけキャッシュに保存
+                        if (hasJapanese(corrected)) {
+                            cache[part] = corrected;
+                        }
                     });
                     progressDone += sourceBatch.length;
                     if (progressBar) {
@@ -836,10 +841,14 @@
 
             for (const part of sourceBatch) {
                 try {
-                    const value = String(await translateTextBatch(part)).trim() || part;
-                    cache[part] = applyTranslationCorrection(part, value);
+                    const value = String(await translateTextBatch(part)).trim();
+                    const corrected = applyTranslationCorrection(part, value);
+                    // ★日本語の時だけキャッシュに保存
+                    if (hasJapanese(corrected)) {
+                        cache[part] = corrected;
+                    }
                 } catch (_) {
-                    cache[part] = part;
+                    // 失敗時はキャッシュしない
                 }
                 progressDone++;
                 if (progressBar) {
@@ -876,7 +885,7 @@
         let cache = {};
         try { cache = JSON.parse(localStorage.getItem(cacheKey) || "{}"); } catch (_) { cache = {}; }
 
-        const pending = unique.filter(name => !shouldKeepTranslationToken(name) && (typeof cache[name] !== "string" || !cache[name]));
+        const pending = unique.filter(name => !shouldKeepTranslationToken(name) && (!cache[name] || !hasJapanese(cache[name])));
         const total = pending.length;
         let done = 0;
         if (progressBar) {
@@ -909,7 +918,11 @@
                 if (parts.length === sourceBatch.length) {
                     sourceBatch.forEach((item, i) => {
                         const value = String(parts[i] || "").trim();
-                        cache[item.name] = applyTranslationCorrection(item.name, value || item.name);
+                        const corrected = applyTranslationCorrection(item.name, value);
+                        // ★日本語の時だけキャッシュに保存
+                        if (hasJapanese(corrected)) {
+                            cache[item.name] = corrected;
+                        }
                     });
                     done += sourceBatch.length;
                     if (progressBar) {
@@ -923,14 +936,13 @@
             for (const item of sourceBatch) {
                 try {
                     const value = String(await translateTextBatch(item.source)).trim();
-                    cache[item.name] = applyTranslationCorrection(item.name, value || item.name);
+                    const corrected = applyTranslationCorrection(item.name, value);
+                    // ★日本語の時だけキャッシュに保存
+                    if (hasJapanese(corrected)) {
+                        cache[item.name] = corrected;
+                    }
                 } catch (_) {
-                    cache[item.name] = applyTranslationCorrection(item.name, item.name);
-                }
-                done++;
-                if (progressBar) {
-                    updateLoadingStatus(progressBar, done, total);
-                    await yieldToUI();
+                    // 失敗時はキャッシュしない
                 }
             }
         };
@@ -2447,7 +2459,7 @@
             tip.style.transform = "translateY(0)";
         });
     }
-    
+
     function hideFlyoutTooltip() {
         if (!flyoutTooltipEl) return;
         flyoutTooltipTarget = null;
@@ -2554,53 +2566,58 @@
         }, true);
     }
 
+    // 日本語文字（ひらがな、カタカナ、漢字）を含むか判定
+    function hasJapanese(text) {
+        return /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/.test(String(text || ""));
+    }
+
     // ============================================================
-    // JListSelect キャッシュから日本語を直接読み出す (API通信ゼロ)
+    // JListSelect キャッシュから日本語を直接読み出す (日本語のみ採用)
     // ============================================================
     function getJListSelectCachedTranslation(rawText) {
         const key = normalize(rawText);
         if (!key) return null;
 
-        // 1. 手動JSON読込 / ブロックキャッシュ
-        if (flyoutTranslationCache[key] && flyoutTranslationCache[key] !== key) {
-            return flyoutTranslationCache[key];
-        }
-
-        // 2. 専門修正辞書
-        if (TRANSLATION_CORRECTIONS[key]) {
+        // 1. 専門修正辞書
+        if (TRANSLATION_CORRECTIONS[key] && hasJapanese(TRANSLATION_CORRECTIONS[key])) {
             return TRANSLATION_CORRECTIONS[key];
         }
 
-        // 3. JListSelect イベントタイプ用キャッシュ (selectionListTranslationCache_v3_eventtype_camel)
+        // 2. 手動JSON読込 / ブロックキャッシュ
+        if (flyoutTranslationCache[key] && hasJapanese(flyoutTranslationCache[key])) {
+            return flyoutTranslationCache[key];
+        }
+
+        // 3. JListSelect イベントタイプ用キャッシュ (日本語の時のみ採用)
         try {
             const eventCache = JSON.parse(localStorage.getItem("selectionListTranslationCache_v3_eventtype_camel") || "{}");
-            if (eventCache[key] && eventCache[key] !== key) {
+            if (eventCache[key] && hasJapanese(eventCache[key])) {
                 return eventCache[key];
             }
         } catch (_) { }
 
-        // 4. JListSelect アイテム名パーツ用キャッシュ (selectionListTranslationCache_v2_parts)
+        // 4. JListSelect アイテム名パーツ用キャッシュ (日本語の時のみ採用)
         try {
             const partsCache = JSON.parse(localStorage.getItem("selectionListTranslationCache_v2_parts") || "{}");
-            if (partsCache[key] && partsCache[key] !== key) {
+            if (partsCache[key] && hasJapanese(partsCache[key])) {
                 return partsCache[key];
             }
-            // "Car_Sedan_01" のようにアンダースコア区切りの場合
             if (key.includes("_")) {
                 const parts = key.split("_");
-                const hasAny = parts.some(p => partsCache[p] && partsCache[p] !== p);
-                if (hasAny) {
-                    return parts.map(p => partsCache[p] || p).join("_");
+                const translatedParts = parts.map(p => (partsCache[p] && hasJapanese(partsCache[p])) ? partsCache[p] : p);
+                const candidate = translatedParts.join("_");
+                if (hasJapanese(candidate)) {
+                    return candidate;
                 }
             }
         } catch (_) { }
 
         // 5. 翻訳マスターキャッシュ
-        if (masterTranslationCache[key] && masterTranslationCache[key] !== key) {
+        if (masterTranslationCache[key] && hasJapanese(masterTranslationCache[key])) {
             return masterTranslationCache[key];
         }
 
-        return null; // キャッシュに存在しない
+        return null; // 日本語化できていない場合は出さない (英語のまま出さない)
     }
 
     // ============================================================
