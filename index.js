@@ -1877,6 +1877,99 @@
         input.click();
     }
 
+    // ============================================================
+    // 全カテゴリ・全ブロック一覧のJSONエクスポート (アプデ差分比較用)
+    // ============================================================
+    function extractToolboxCategoriesAndBlocks() {
+        const ws = getWorkspace();
+        const categories = {};
+
+        // 1. Blockly の Toolbox 定義ツリーから全カテゴリ・ブロックを取得
+        try {
+            const tree = ws?.options?.languageTree;
+            if (tree && Array.isArray(tree.contents)) {
+                tree.contents.forEach(item => {
+                    const catName = item.name || item.kind;
+                    if (!catName || item.kind === "sep") return;
+                    const blocks = [];
+                    if (Array.isArray(item.contents)) {
+                        item.contents.forEach(c => {
+                            const type = c.type || (c.kind === "block" && c.type);
+                            if (type) blocks.push(type);
+                        });
+                    }
+                    categories[catName] = {
+                        count: blocks.length,
+                        blocks: blocks
+                    };
+                });
+            } else if (tree) {
+                // XML形式の場合
+                const doc = typeof tree === "string" ? new DOMParser().parseFromString(tree, "text/xml") : tree;
+                doc.querySelectorAll("category").forEach(cat => {
+                    const catName = cat.getAttribute("name") || "Unknown";
+                    const blocks = [...cat.querySelectorAll("block")].map(b => b.getAttribute("type")).filter(Boolean);
+                    categories[catName] = {
+                        count: blocks.length,
+                        blocks: blocks
+                    };
+                });
+            }
+        } catch (_) { }
+
+        // 2. 取得できなかった場合の Toolbox インスタンスからのフォールバック
+        if (!Object.keys(categories).length && ws?.getToolbox) {
+            try {
+                const toolbox = ws.getToolbox();
+                const items = toolbox?.getToolboxItems?.() || toolbox?.contents_ || [];
+                items.forEach(item => {
+                    const name = item.getName?.() || item.toolboxItemDef_?.name;
+                    if (!name) return;
+                    const def = item.toolboxItemDef_ || item.def_;
+                    const blocks = [];
+                    if (Array.isArray(def?.contents)) {
+                        def.contents.forEach(c => {
+                            if (c.type) blocks.push(c.type);
+                        });
+                    }
+                    categories[name] = {
+                        count: blocks.length,
+                        blocks: blocks
+                    };
+                });
+            } catch (_) { }
+        }
+
+        return categories;
+    }
+
+    function exportToolboxListJson() {
+        const categories = extractToolboxCategoriesAndBlocks();
+        let totalBlocks = 0;
+        Object.values(categories).forEach(c => totalBlocks += (c.count || 0));
+
+        const output = {
+            _description: "Battlefield 2042 Portal Toolbox Block List",
+            exportedAt: new Date().toISOString(),
+            totalCategories: Object.keys(categories).length,
+            totalBlocks: totalBlocks,
+            categories: categories
+        };
+
+        const jsonText = JSON.stringify(output, null, 2);
+        const blob = new Blob([jsonText], { type: "application/json;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+        a.download = `portal_blocks_list_${dateStr}.json`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        alert(`全${output.totalCategories}カテゴリ（合計${totalBlocks}個のブロック）の一覧をJSONに出力しました！`);
+    }
+
     function removeCacheSubmenu() {
         document.querySelectorAll('[data-selection-list-plugin="cache-submenu"]').forEach(el => el.remove());
     }
@@ -1930,6 +2023,11 @@
             }));
             sub.appendChild(menuItem("キャッシュを読込 (.json)", () => {
                 importBlockCacheJson();
+                removeCacheSubmenu();
+            }));
+            // ★ここに追加
+            sub.appendChild(menuItem("ブロック一覧 (.json)", () => {
+                exportToolboxListJson();
                 removeCacheSubmenu();
             }));
 
