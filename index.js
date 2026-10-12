@@ -1878,49 +1878,80 @@
     }
 
     // ============================================================
-    // 全カテゴリ・全ブロック一覧のJSONエクスポート (階層ネスト対応版)
+    // 全カテゴリ・全ブロック一覧のJSONエクスポート (外枠ブロック・XML文字列完全対応版)
     // ============================================================
     function extractToolboxCategoriesAndBlocks() {
         const ws = getWorkspace();
         const categories = {};
 
-        // ネストされたカテゴリを再帰的に走査する関数
+        // 任意のブロック定義オブジェクト/XMLから「type名」を漏れなく抽出するヘルパー
+        function extractBlockType(target) {
+            if (!target) return null;
+            // 1. 直接プロパティにある場合
+            if (typeof target.type === "string" && target.type) return target.type;
+            // 2. DOM要素の場合
+            if (target.getAttribute && target.getAttribute("type")) return target.getAttribute("type");
+            // 3. blockxml プロパティ (文字列または要素) の場合 ★ここが外枠ブロックのキー
+            if (target.blockxml) {
+                if (typeof target.blockxml === "string") {
+                    const match = target.blockxml.match(/type=["']([^"']+)["']/i);
+                    if (match) return match[1];
+                } else if (target.blockxml.getAttribute) {
+                    const t = target.blockxml.getAttribute("type");
+                    if (t) return t;
+                }
+            }
+            // 4. 文字列そのものの中に type="..." がある場合
+            if (typeof target === "string") {
+                const match = target.match(/type=["']([^"']+)["']/i);
+                if (match) return match[1];
+            }
+            return null;
+        }
+
+        // ネストされたカテゴリを再帰走査
         function processCategoryItem(item, parentPath = "") {
             if (!item) return;
             const name = item.name || item.getAttribute?.("name") || item.kind;
             if (!name || name === "sep" || item.kind === "sep") return;
 
-            // 階層名を作成 (例: "Actions > Player")
             const currentPath = parentPath ? `${parentPath} > ${name}` : name;
             const blockList = [];
+            const seenTypes = new Set();
+
+            function addType(t) {
+                if (t && !seenTypes.has(t)) {
+                    seenTypes.add(t);
+                    blockList.push(t);
+                }
+            }
 
             // 1. JSON形式のツリー走査
             if (Array.isArray(item.contents)) {
                 item.contents.forEach(child => {
-                    // 子要素がさらにカテゴリ（黄色ブロックなどのサブカテゴリ）の場合
-                    if (child.kind === "category" || (child.contents && !child.type)) {
+                    // サブカテゴリの場合
+                    if (child.kind === "category" || (child.contents && !child.type && !child.blockxml)) {
                         processCategoryItem(child, currentPath);
                     } else {
-                        const type = child.type || (child.kind === "block" && child.type) || child.blockxml?.getAttribute?.("type");
-                        if (type) blockList.push(type);
+                        addType(extractBlockType(child));
                     }
                 });
             }
             // 2. XML形式（DOM）のツリー走査
-            else if (item.children) {
-                const children = [...item.children];
-                children.forEach(child => {
+            else if (item.children || item.childNodes) {
+                const nodes = [...(item.children || item.childNodes)];
+                nodes.forEach(child => {
                     const tag = child.tagName?.toLowerCase();
                     if (tag === "category") {
                         processCategoryItem(child, currentPath);
                     } else if (tag === "block") {
-                        const type = child.getAttribute("type");
-                        if (type) blockList.push(type);
+                        // 最上位の外枠ブロック
+                        addType(extractBlockType(child));
                     }
                 });
             }
 
-            // 3. 動的生成カテゴリ（custom属性コールバック）の展開
+            // 3. 動的コールバックカテゴリ (custom属性) の展開
             const custom = item.custom || item.getAttribute?.("custom");
             if (custom && ws?.getToolboxCategoryCallback) {
                 try {
@@ -1928,16 +1959,12 @@
                     if (typeof cb === "function") {
                         const dynBlocks = cb(ws);
                         if (Array.isArray(dynBlocks)) {
-                            dynBlocks.forEach(b => {
-                                const type = b.type || b.getAttribute?.("type");
-                                if (type) blockList.push(type);
-                            });
+                            dynBlocks.forEach(b => addType(extractBlockType(b)));
                         }
                     }
                 } catch (_) { }
             }
 
-            // ブロックが存在するカテゴリを登録
             if (blockList.length > 0) {
                 categories[currentPath] = {
                     count: blockList.length,
@@ -1946,7 +1973,7 @@
             }
         }
 
-        // ワークスペースのToolboxツリーのルートから走査開始
+        // ルートから走査開始
         try {
             const tree = ws?.options?.languageTree;
             if (tree && Array.isArray(tree.contents)) {
@@ -1957,7 +1984,7 @@
             }
         } catch (_) { }
 
-        // フォールバック: Toolboxインスタンスから走査
+        // フォールバック走査
         if (!Object.keys(categories).length && ws?.getToolbox) {
             try {
                 const toolbox = ws.getToolbox();
