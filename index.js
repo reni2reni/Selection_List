@@ -2418,6 +2418,36 @@
         }
     }
 
+    function showDirectTooltip(targetElement, text, isWorkspace = false) {
+        const tip = getOrCreateFlyoutTooltip();
+        flyoutTooltipTarget = targetElement;
+        const targetRect = targetElement.getBoundingClientRect();
+
+        tip.style.zoom = "1";
+        if (isWorkspace) {
+            tip.style.padding = "6px 11px";
+            tip.style.minWidth = "130px";
+            tip.style.borderRadius = "6px";
+            tip.style.borderWidth = "1.5px";
+            tip._jaTitle.style.fontSize = "14px";
+        } else {
+            tip.style.padding = "10px 16px";
+            tip.style.minWidth = "200px";
+            tip.style.borderRadius = "8px";
+            tip.style.borderWidth = "2px";
+            tip._jaTitle.style.fontSize = "20px";
+        }
+
+        tip._jaTitle.textContent = text;
+        tip.style.display = "flex";
+        positionFlyoutTooltip(targetRect);
+
+        requestAnimationFrame(() => {
+            tip.style.opacity = "1";
+            tip.style.transform = "translateY(0)";
+        });
+    }
+    
     function hideFlyoutTooltip() {
         if (!flyoutTooltipEl) return;
         flyoutTooltipTarget = null;
@@ -2525,6 +2555,55 @@
     }
 
     // ============================================================
+    // JListSelect キャッシュから日本語を直接読み出す (API通信ゼロ)
+    // ============================================================
+    function getJListSelectCachedTranslation(rawText) {
+        const key = normalize(rawText);
+        if (!key) return null;
+
+        // 1. 手動JSON読込 / ブロックキャッシュ
+        if (flyoutTranslationCache[key] && flyoutTranslationCache[key] !== key) {
+            return flyoutTranslationCache[key];
+        }
+
+        // 2. 専門修正辞書
+        if (TRANSLATION_CORRECTIONS[key]) {
+            return TRANSLATION_CORRECTIONS[key];
+        }
+
+        // 3. JListSelect イベントタイプ用キャッシュ (selectionListTranslationCache_v3_eventtype_camel)
+        try {
+            const eventCache = JSON.parse(localStorage.getItem("selectionListTranslationCache_v3_eventtype_camel") || "{}");
+            if (eventCache[key] && eventCache[key] !== key) {
+                return eventCache[key];
+            }
+        } catch (_) { }
+
+        // 4. JListSelect アイテム名パーツ用キャッシュ (selectionListTranslationCache_v2_parts)
+        try {
+            const partsCache = JSON.parse(localStorage.getItem("selectionListTranslationCache_v2_parts") || "{}");
+            if (partsCache[key] && partsCache[key] !== key) {
+                return partsCache[key];
+            }
+            // "Car_Sedan_01" のようにアンダースコア区切りの場合
+            if (key.includes("_")) {
+                const parts = key.split("_");
+                const hasAny = parts.some(p => partsCache[p] && partsCache[p] !== p);
+                if (hasAny) {
+                    return parts.map(p => partsCache[p] || p).join("_");
+                }
+            }
+        } catch (_) { }
+
+        // 5. 翻訳マスターキャッシュ
+        if (masterTranslationCache[key] && masterTranslationCache[key] !== key) {
+            return masterTranslationCache[key];
+        }
+
+        return null; // キャッシュに存在しない
+    }
+
+    // ============================================================
     // プルダウン（ドロップダウンメニュー＆選択肢）の日本語ポップアップ
     // ============================================================
     function bindDropdownHoverListener() {
@@ -2534,7 +2613,7 @@
         document.addEventListener("mouseover", event => {
             if (!translationEnabled) return;
 
-            // 1. 開いたプルダウンメニュー内の各選択肢 (EVENTTYPEやMAP一覧の各行)
+            // 1. 開いたプルダウンメニュー内の各選択肢
             const menuItem = event.target?.closest?.(
                 '.blocklyDropdownMenu .blocklyMenuItem, .goog-menu .goog-menuitem, [role="menuitem"], .blocklyMenu .blocklyMenuItem'
             );
@@ -2543,8 +2622,11 @@
                 const rawText = normalize(menuItem.innerText || menuItem.textContent);
                 if (!rawText || rawText.length < 2 || /^[\d\s.,+\-*/=()]+$/.test(rawText)) return;
 
-                // コンパクトサイズ(0.7倍)で選択肢の左上にポップアップ表示
-                showFlyoutTooltip(menuItem, rawText, true);
+                // JListSelect キャッシュから日本語を取得 (APIは一切呼ばない)
+                const ja = getJListSelectCachedTranslation(rawText);
+                if (ja) {
+                    showDirectTooltip(menuItem, ja, true);
+                }
                 return;
             }
 
@@ -2557,7 +2639,10 @@
                 const rawText = normalize(dropdownField.textContent);
                 if (!rawText || rawText.length < 2 || /^[\d\s.,+\-*/=()]+$/.test(rawText)) return;
 
-                showFlyoutTooltip(dropdownField, rawText, true);
+                const ja = getJListSelectCachedTranslation(rawText);
+                if (ja) {
+                    showDirectTooltip(dropdownField, ja, true);
+                }
             }
         }, true);
 
