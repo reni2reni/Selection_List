@@ -2524,6 +2524,59 @@
         }, true);
     }
 
+    // ============================================================
+    // プルダウン（ドロップダウンメニュー＆選択肢）の日本語ポップアップ
+    // ============================================================
+    function bindDropdownHoverListener() {
+        if (window.__selectionListDropdownHoverBound) return;
+        window.__selectionListDropdownHoverBound = true;
+
+        document.addEventListener("mouseover", event => {
+            if (!translationEnabled) return;
+
+            // 1. 開いたプルダウンメニュー内の各選択肢 (EVENTTYPEやMAP一覧の各行)
+            const menuItem = event.target?.closest?.(
+                '.blocklyDropdownMenu .blocklyMenuItem, .goog-menu .goog-menuitem, [role="menuitem"], .blocklyMenu .blocklyMenuItem'
+            );
+            if (menuItem) {
+                if (flyoutTooltipTarget === menuItem) return;
+                const rawText = normalize(menuItem.innerText || menuItem.textContent);
+                if (!rawText || rawText.length < 2 || /^[\d\s.,+\-*/=()]+$/.test(rawText)) return;
+
+                // コンパクトサイズ(0.7倍)で選択肢の左上にポップアップ表示
+                showFlyoutTooltip(menuItem, rawText, true);
+                return;
+            }
+
+            // 2. ブロック表面のプルダウン表示枠 (現在選択されている値)
+            const dropdownField = event.target?.closest?.(
+                '.blocklyWorkspace g.blocklyEditableText, .blocklyFlyout g.blocklyEditableText'
+            );
+            if (dropdownField) {
+                if (flyoutTooltipTarget === dropdownField) return;
+                const rawText = normalize(dropdownField.textContent);
+                if (!rawText || rawText.length < 2 || /^[\d\s.,+\-*/=()]+$/.test(rawText)) return;
+
+                showFlyoutTooltip(dropdownField, rawText, true);
+            }
+        }, true);
+
+        document.addEventListener("mouseout", event => {
+            if (!flyoutTooltipTarget) return;
+            const target = event.target?.closest?.(
+                '.blocklyDropdownMenu .blocklyMenuItem, .goog-menu .goog-menuitem, [role="menuitem"], .blocklyMenu .blocklyMenuItem, g.blocklyEditableText'
+            );
+            if (target === flyoutTooltipTarget) {
+                hideFlyoutTooltip();
+            }
+        }, true);
+
+        // プルダウンが閉じられた（クリックされた）時は即座にポップアップを消去
+        document.addEventListener("click", () => {
+            hideFlyoutTooltip();
+        }, true);
+    }
+
     let isScanning = false;
     function scan() {
         if (isScanning) return; // 無限ループ防止ガード
@@ -2576,7 +2629,8 @@
     plugin.initializeWorkspace = async function () {
         bindNativeHelpTranslation();
         bindFlyoutHoverListener();
-        bindNativeTooltipTranslation(); // ★この行を追加
+        bindNativeTooltipTranslation();
+        bindDropdownHoverListener(); // ★この行を追加
         startObserver();
         scan();
     };
