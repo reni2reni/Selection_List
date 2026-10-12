@@ -2621,6 +2621,53 @@
     }
 
     // ============================================================
+    // JListSelect未キャッシュ時のオンライン翻訳フォールバック
+    // ============================================================
+    async function resolveDropdownTranslation(rawText) {
+        const key = normalize(rawText);
+        if (!key) return null;
+
+        // 1. まずJListSelectキャッシュにあれば即座に返す
+        const cached = getJListSelectCachedTranslation(key);
+        if (cached) return cached;
+
+        // 2. キャッシュにない場合のみオンライン翻訳を実行
+        let translated = "";
+        try {
+            if (key.includes("_")) {
+                const parts = key.split("_");
+                const translatedParts = await Promise.all(parts.map(async p => {
+                    if (!p || shouldKeepTranslationToken(p)) return p;
+                    const hit = getJListSelectCachedTranslation(p);
+                    if (hit) return hit;
+                    const res = await translateTextBatch(p);
+                    return applyTranslationCorrection(p, res);
+                }));
+                translated = translatedParts.join("_");
+            } else {
+                const spaced = splitCamelCaseForTranslation(key);
+                translated = await translateTextBatch(spaced);
+                translated = applyTranslationCorrection(key, translated);
+            }
+        } catch (_) {
+            return null; // 通信エラー時は表示無し
+        }
+
+        // 3. 日本語が得られた場合のみ採用し、次回用にJListSelectキャッシュへ保存
+        if (translated && hasJapanese(translated)) {
+            try {
+                const eventCache = JSON.parse(localStorage.getItem("selectionListTranslationCache_v3_eventtype_camel") || "{}");
+                eventCache[key] = translated;
+                localStorage.setItem("selectionListTranslationCache_v3_eventtype_camel", JSON.stringify(eventCache));
+            } catch (_) { }
+            return translated;
+        }
+
+        // 4. それでもダメ（英語のまま等）なら表示無し
+        return null;
+    }
+
+    // ============================================================
     // プルダウン（ドロップダウンメニュー＆選択肢）の日本語ポップアップ
     // ============================================================
     function bindDropdownHoverListener() {
@@ -2639,10 +2686,18 @@
                 const rawText = normalize(menuItem.innerText || menuItem.textContent);
                 if (!rawText || rawText.length < 2 || /^[\d\s.,+\-*/=()]+$/.test(rawText)) return;
 
-                // JListSelect キャッシュから日本語を取得 (APIは一切呼ばない)
-                const ja = getJListSelectCachedTranslation(rawText);
-                if (ja) {
-                    showDirectTooltip(menuItem, ja, true);
+                flyoutTooltipTarget = menuItem;
+                // キャッシュがあれば即時表示、無ければオンライン翻訳
+                const fastJa = getJListSelectCachedTranslation(rawText);
+                if (fastJa) {
+                    showDirectTooltip(menuItem, fastJa, true);
+                } else {
+                    resolveDropdownTranslation(rawText).then(ja => {
+                        // 日本語が得られた場合のみ表示（ダメなら表示無し）
+                        if (ja && flyoutTooltipTarget === menuItem) {
+                            showDirectTooltip(menuItem, ja, true);
+                        }
+                    });
                 }
                 return;
             }
@@ -2656,9 +2711,16 @@
                 const rawText = normalize(dropdownField.textContent);
                 if (!rawText || rawText.length < 2 || /^[\d\s.,+\-*/=()]+$/.test(rawText)) return;
 
-                const ja = getJListSelectCachedTranslation(rawText);
-                if (ja) {
-                    showDirectTooltip(dropdownField, ja, true);
+                flyoutTooltipTarget = dropdownField;
+                const fastJa = getJListSelectCachedTranslation(rawText);
+                if (fastJa) {
+                    showDirectTooltip(dropdownField, fastJa, true);
+                } else {
+                    resolveDropdownTranslation(rawText).then(ja => {
+                        if (ja && flyoutTooltipTarget === dropdownField) {
+                            showDirectTooltip(dropdownField, ja, true);
+                        }
+                    });
                 }
             }
         }, true);
