@@ -1878,123 +1878,165 @@
     }
 
     // ============================================================
-    // 全カテゴリ・全ブロック一覧のJSONエクスポート (外枠ブロック・XML文字列完全対応版)
+    // 全カテゴリ・全ブロック完全抽出 (外枠アクション＆値ブロック両対応)
     // ============================================================
     function extractToolboxCategoriesAndBlocks() {
         const ws = getWorkspace();
+        const Blockly = _Blockly || window.Blockly;
         const categories = {};
+        const recordedBlocks = new Set();
 
-        // 任意のブロック定義オブジェクト/XMLから「type名」を漏れなく抽出するヘルパー
-        function extractBlockType(target) {
-            if (!target) return null;
-            // 1. 直接プロパティにある場合
-            if (typeof target.type === "string" && target.type) return target.type;
-            // 2. DOM要素の場合
-            if (target.getAttribute && target.getAttribute("type")) return target.getAttribute("type");
-            // 3. blockxml プロパティ (文字列または要素) の場合 ★ここが外枠ブロックのキー
-            if (target.blockxml) {
-                if (typeof target.blockxml === "string") {
-                    const match = target.blockxml.match(/type=["']([^"']+)["']/i);
-                    if (match) return match[1];
-                } else if (target.blockxml.getAttribute) {
-                    const t = target.blockxml.getAttribute("type");
-                    if (t) return t;
-                }
+        function addBlockToCategory(catName, type) {
+            const cleanType = normalize(type);
+            if (!cleanType || cleanType === "null" || cleanType === "undefined") return;
+            if (!categories[catName]) {
+                categories[catName] = { count: 0, blocks: [] };
             }
-            // 4. 文字列そのものの中に type="..." がある場合
-            if (typeof target === "string") {
-                const match = target.match(/type=["']([^"']+)["']/i);
-                if (match) return match[1];
+            if (!categories[catName].blocks.includes(cleanType)) {
+                categories[catName].blocks.push(cleanType);
+                categories[catName].count = categories[catName].blocks.length;
+                recordedBlocks.add(cleanType);
+            }
+        }
+
+        // オブジェクト/XML/文字列からtype名を徹底抽出
+        function parseAnyBlockType(item) {
+            if (!item) return null;
+            if (typeof item === "string") {
+                const m = item.match(/type=["']([^"']+)["']/i);
+                return m ? m[1] : null;
+            }
+            if (item.getAttribute && item.getAttribute("type")) return item.getAttribute("type");
+            if (typeof item.type === "string" && item.type) return item.type;
+            if (item.blockxml) {
+                if (typeof item.blockxml === "string") {
+                    const m = item.blockxml.match(/type=["']([^"']+)["']/i);
+                    if (m) return m[1];
+                } else if (item.blockxml.getAttribute) {
+                    return item.blockxml.getAttribute("type");
+                }
             }
             return null;
         }
 
-        // ネストされたカテゴリを再帰走査
-        function processCategoryItem(item, parentPath = "") {
-            if (!item) return;
-            const name = item.name || item.getAttribute?.("name") || item.kind;
-            if (!name || name === "sep" || item.kind === "sep") return;
-
-            const currentPath = parentPath ? `${parentPath} > ${name}` : name;
-            const blockList = [];
-            const seenTypes = new Set();
-
-            function addType(t) {
-                if (t && !seenTypes.has(t)) {
-                    seenTypes.add(t);
-                    blockList.push(t);
-                }
-            }
-
-            // 1. JSON形式のツリー走査
-            if (Array.isArray(item.contents)) {
-                item.contents.forEach(child => {
-                    // サブカテゴリの場合
-                    if (child.kind === "category" || (child.contents && !child.type && !child.blockxml)) {
-                        processCategoryItem(child, currentPath);
-                    } else {
-                        addType(extractBlockType(child));
-                    }
-                });
-            }
-            // 2. XML形式（DOM）のツリー走査
-            else if (item.children || item.childNodes) {
-                const nodes = [...(item.children || item.childNodes)];
-                nodes.forEach(child => {
-                    const tag = child.tagName?.toLowerCase();
-                    if (tag === "category") {
-                        processCategoryItem(child, currentPath);
-                    } else if (tag === "block") {
-                        // 最上位の外枠ブロック
-                        addType(extractBlockType(child));
-                    }
-                });
-            }
-
-            // 3. 動的コールバックカテゴリ (custom属性) の展開
-            const custom = item.custom || item.getAttribute?.("custom");
-            if (custom && ws?.getToolboxCategoryCallback) {
-                try {
-                    const cb = ws.getToolboxCategoryCallback(custom);
-                    if (typeof cb === "function") {
-                        const dynBlocks = cb(ws);
-                        if (Array.isArray(dynBlocks)) {
-                            dynBlocks.forEach(b => addType(extractBlockType(b)));
-                        }
-                    }
-                } catch (_) { }
-            }
-
-            if (blockList.length > 0) {
-                categories[currentPath] = {
-                    count: blockList.length,
-                    blocks: blockList
-                };
-            }
-        }
-
-        // ルートから走査開始
+        // -------------------------------------------------------------
+        // アプローチ1: Blockly Toolboxインスタンスから直接展開 (最も確実)
+        // -------------------------------------------------------------
         try {
-            const tree = ws?.options?.languageTree;
-            if (tree && Array.isArray(tree.contents)) {
-                tree.contents.forEach(item => processCategoryItem(item, ""));
-            } else if (tree) {
-                const doc = typeof tree === "string" ? new DOMParser().parseFromString(tree, "text/xml") : tree;
-                doc.querySelectorAll("xml > category, toolbox > category").forEach(cat => processCategoryItem(cat, ""));
+            const toolbox = ws?.getToolbox?.();
+            if (toolbox) {
+                // すべてのToolboxアイテムを取得
+                const items = toolbox.getToolboxItems?.() || toolbox.contents_ || [];
+
+                function inspectToolboxItem(item, parentPath = "") {
+                    if (!item) return;
+                    const name = item.getName?.() || item.name_ || item.toolboxItemDef_?.name || item.id_;
+                    if (!name || name === "sep") return;
+
+                    const currentPath = parentPath ? `${parentPath} > ${name}` : name;
+
+                    // A. 公式の getContents() メソッド（画面に実際に出る全ブロック定義）
+                    let contents = [];
+                    try {
+                        if (typeof item.getContents === "function") {
+                            contents = item.getContents() || [];
+                        }
+                    } catch (_) { }
+
+                    // B. 定義オブジェクトの contents
+                    const defContents = item.toolboxItemDef_?.contents || item.def_?.contents;
+                    if (Array.isArray(defContents)) {
+                        contents = contents.concat(defContents);
+                    }
+
+                    // ブロックの収集
+                    if (Array.isArray(contents) && contents.length > 0) {
+                        contents.forEach(c => {
+                            if (!c) return;
+                            // サブカテゴリなら再帰
+                            if (c.kind === "category" || (c.contents && !c.type && !c.blockxml)) {
+                                inspectToolboxItem(c, currentPath);
+                            } else {
+                                const t = parseAnyBlockType(c);
+                                if (t) addBlockToCategory(currentPath, t);
+                            }
+                        });
+                    }
+
+                    // C. 子カテゴリ（サブツリー）を再帰探索
+                    const subItems = item.getChildToolboxItems?.() || item.children_ || [];
+                    if (Array.isArray(subItems)) {
+                        subItems.forEach(sub => inspectToolboxItem(sub, currentPath));
+                    }
+                }
+
+                items.forEach(it => inspectToolboxItem(it, ""));
             }
         } catch (_) { }
 
-        // フォールバック走査
-        if (!Object.keys(categories).length && ws?.getToolbox) {
-            try {
-                const toolbox = ws.getToolbox();
-                const items = toolbox?.getToolboxItems?.() || toolbox?.contents_ || [];
-                items.forEach(item => {
-                    const def = item.toolboxItemDef_ || item.def_;
-                    if (def) processCategoryItem(def, "");
-                });
-            } catch (_) { }
-        }
+        // -------------------------------------------------------------
+        // アプローチ2: XML / JSON languageTree の深層走査 (二重チェック)
+        // -------------------------------------------------------------
+        try {
+            const tree = ws?.options?.languageTree;
+            if (tree) {
+                if (typeof tree === "string" || tree.nodeType === 1) {
+                    const doc = typeof tree === "string" ? new DOMParser().parseFromString(tree, "text/xml") : tree;
+                    // すべてのカテゴリ要素を網羅
+                    doc.querySelectorAll("category").forEach(cat => {
+                        let catPath = cat.getAttribute("name") || "Unknown";
+                        let p = cat.parentElement;
+                        while (p && p.tagName?.toLowerCase() === "category") {
+                            catPath = `${p.getAttribute("name") || "Category"} > ${catPath}`;
+                            p = p.parentElement;
+                        }
+
+                        // このカテゴリに属する全ブロック（外枠・内枠問わず）
+                        cat.querySelectorAll("block").forEach(b => {
+                            const t = b.getAttribute("type");
+                            if (t) addBlockToCategory(catPath, t);
+                        });
+                    });
+                } else if (Array.isArray(tree.contents)) {
+                    function walkTreeJson(node, pPath = "") {
+                        if (!node) return;
+                        const cName = node.name || node.kind;
+                        const cur = pPath ? `${pPath} > ${cName}` : cName;
+                        if (Array.isArray(node.contents)) {
+                            node.contents.forEach(child => {
+                                if (child.kind === "category" || (child.contents && !child.type)) {
+                                    walkTreeJson(child, cur);
+                                } else {
+                                    const t = parseAnyBlockType(child);
+                                    if (t) addBlockToCategory(cur, t);
+                                }
+                            });
+                        }
+                    }
+                    tree.contents.forEach(n => walkTreeJson(n, ""));
+                }
+            }
+        } catch (_) { }
+
+        // -------------------------------------------------------------
+        // アプローチ3: Portal 全ブロックレジストリとの突合 (絶対漏れ防止)
+        // -------------------------------------------------------------
+        try {
+            if (Blockly?.Blocks) {
+                const allRegisteredTypes = Object.keys(Blockly.Blocks);
+                const missingBlocks = allRegisteredTypes.filter(t => !recordedBlocks.has(t));
+
+                // 万が一Toolboxの特定カテゴリで拾えなかったブロックが存在する場合、
+                // 取りこぼしなく「Uncategorized (Other Blocks)」として完全回収
+                if (missingBlocks.length > 0) {
+                    missingBlocks.forEach(t => {
+                        // システム用の一時ブロック等を除外
+                        if (/^(placeholder|dummy|temp)/i.test(t)) return;
+                        addBlockToCategory("Uncategorized Blocks", t);
+                    });
+                }
+            }
+        } catch (_) { }
 
         return categories;
     }
