@@ -1693,6 +1693,33 @@
         return false;
     }
 
+    // ============================================================
+    // Selection List ▶ サブメニューのホバー開閉制御
+    // ============================================================
+    let floatingMenuCloseTimer = null;
+
+    function scheduleCloseFloatingMenu() {
+        if (floatingMenuCloseTimer) clearTimeout(floatingMenuCloseTimer);
+        floatingMenuCloseTimer = setTimeout(() => {
+            const rootItem = document.querySelector('[data-selection-list-plugin="root"]');
+            const floatingPanel = document.querySelector('[data-selection-list-plugin="floating-root"]');
+            const isHoverRoot = rootItem && rootItem.matches(":hover");
+            const isHoverFloating = floatingPanel && floatingPanel.matches(":hover");
+
+            // 本項目および展開サブメニューのどちらにもカーソルが無い場合は閉じる
+            if (!isHoverRoot && !isHoverFloating) {
+                removeFloatingMenu();
+            }
+        }, 120);
+    }
+
+    function cancelCloseFloatingMenu() {
+        if (floatingMenuCloseTimer) {
+            clearTimeout(floatingMenuCloseTimer);
+            floatingMenuCloseTimer = null;
+        }
+    }
+
     function removeFloatingMenu() {
         document.querySelectorAll('[data-selection-list-plugin="floating-root"]').forEach(el => el.remove());
         if (floatingMenuObserver) {
@@ -1792,6 +1819,11 @@
             })
         ];
         entries.forEach(entry => panel.appendChild(entry));
+
+        // 展開メニュー上にカーソルがある間は維持し、外れたら閉じる
+        panel.addEventListener("mouseenter", cancelCloseFloatingMenu);
+        panel.addEventListener("mouseleave", scheduleCloseFloatingMenu);
+
         anchor.appendChild(panel);
         return panel;
     }
@@ -2178,10 +2210,13 @@
 
         item.addEventListener("mouseenter", event => {
             item.style.background = "rgb(48, 60, 62)";
+            cancelCloseFloatingMenu();
             createFloatingMenu(item, event.clientX || lastContextMenuX, event.clientY || lastContextMenuY);
         });
         item.addEventListener("mouseleave", () => {
             item.style.background = "rgb(22, 29, 30)";
+            // 本項目からカーソルが離れたら閉じる判定を開始
+            scheduleCloseFloatingMenu();
         });
         submenu.appendChild(item);
     }
