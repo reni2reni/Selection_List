@@ -2144,9 +2144,9 @@
 
             Object.assign(sub.style, {
                 position: "fixed",
-                left: `${rect.left + rect.width / 2}px`,
-                top: `${rect.bottom}px`,
-                transform: "translateX(-50%)",
+                left: `${rect.right}px`,
+                top: `${rect.top + rect.height / 2}px`,
+                transform: "translateY(-50%)",
                 minWidth: "160px",
                 background: "rgb(22, 29, 30)",
                 color: "#fff",
