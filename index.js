@@ -1736,20 +1736,13 @@
         const px = Number.isFinite(clientX) ? clientX : 0;
         const py = Number.isFinite(clientY) ? clientY : 0;
 
+        const rect = anchor.getBoundingClientRect();
+
         Object.assign(panel.style, {
             position: "fixed",
-            left: `${Math.max(0, Math.round(px + 26))}px`,
-            top: `${Math.max(0, Math.round(py))}px`,
-            minWidth: "190px",
-            background: "rgb(22, 29, 30)",
-            color: "#fff",
-            border: "1px solid #3a4648",
-            boxShadow: "0 3px 14px rgba(0,0,0,.45)",
-            zIndex: "2147483647",
-            padding: "2px 0",
-            display: "flex",
-            flexDirection: "column",
-            pointerEvents: "auto"
+            left: `${rect.left + (rect.width / 2)}px`,
+            top: `${rect.bottom}px`,
+            transform: "translateX(-50%)"
         });
 
         const ruleMode = isRuleBlock(getCurrentContextBlock());
@@ -2139,16 +2132,21 @@
 
         item.addEventListener("mouseenter", event => {
             item.style.background = "rgb(48, 60, 62)";
+
+            // 既存のサブメニューがあれば削除して、位置を再計算する
             removeCacheSubmenu();
 
-            // サブメニュー（保存・読込）を右側に展開
+            // サブメニュー（保存・読込）
             const sub = document.createElement("div");
             sub.setAttribute("data-selection-list-plugin", "cache-submenu");
+
             const rect = item.getBoundingClientRect();
+
             Object.assign(sub.style, {
                 position: "fixed",
-                left: `${rect.right + 2}px`,
-                top: `${rect.top}px`,
+                left: `${rect.left + rect.width / 2}px`,
+                top: `${rect.bottom}px`,
+                transform: "translateX(-50%)",
                 minWidth: "160px",
                 background: "rgb(22, 29, 30)",
                 color: "#fff",
