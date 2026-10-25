@@ -1742,7 +1742,7 @@
             position: "fixed",
             left: `${rect.left + rect.width / 2}px`,
             top: `${rect.bottom}px`,
-            transform: "translateX(-50%)"
+            transform: "translateX(0)"
         });
 
         const ruleMode = isRuleBlock(getCurrentContextBlock());
