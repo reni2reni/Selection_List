@@ -1740,7 +1740,7 @@
 
         Object.assign(panel.style, {
             position: "fixed",
-            left: `${rect.left + rect.width / 3}px`,
+            left: `${rect.left + rect.width / 1.5}px`,
             top: `${rect.bottom}px`,
             transform: "translateX(0)"
         });
