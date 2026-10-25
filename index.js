@@ -1740,7 +1740,7 @@
 
         Object.assign(panel.style, {
             position: "fixed",
-            left: `${rect.left + rect.width / 1.5}px`,
+            left: `${rect.left + rect.width / 2}px`,
             top: `${rect.bottom}px`,
             transform: "translateX(0)"
         });
@@ -2203,7 +2203,7 @@
             alignItems: "center"
         });
         const label = document.createElement("span");
-        label.textContent = "Selection List ▶";
+        label.textContent = "Selection List ▶     ";
         item.appendChild(label);
 
         item.addEventListener("mouseenter", event => {
