@@ -1742,7 +1742,10 @@
             position: "fixed",
             left: `${rect.left + rect.width / 2}px`,
             top: `${rect.bottom}px`,
-            transform: "translateX(0)"
+            transform: "translateX(0)",
+            width: "190px",
+            minWidth: "190px",
+            boxSizing: "border-box"
         });
 
         const ruleMode = isRuleBlock(getCurrentContextBlock());
@@ -2200,7 +2203,8 @@
             borderTop: "1px solid #3a4648",
             display: "flex",
             justifyContent: "space-between",
-            alignItems: "center"
+            alignItems: "center",
+            width: "100%"
         });
         const label = document.createElement("span");
         label.textContent = "Selection List ▶     ";
