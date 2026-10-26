@@ -2802,8 +2802,6 @@
             for (const submenu of submenus) {
                 if (eligible) {
                     addSelectionListMenu(submenu);
-                } else {
-                    submenu.querySelector('[data-selection-list-plugin="root"]')?.remove();
                 }
                 addTranslationToggleMenu(submenu);
                 addCacheManagementMenu(submenu); // ★この行を追加
