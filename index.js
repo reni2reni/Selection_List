@@ -1821,6 +1821,18 @@
         panel.addEventListener("mouseleave", scheduleCloseFloatingMenu);
 
         anchor.appendChild(panel);
+
+        // 画面右端・下端からはみ出さないように位置を補正
+        const panelRect = panel.getBoundingClientRect();
+
+        if (panelRect.right > window.innerWidth) {
+            panel.style.left = `${Math.max(0, window.innerWidth - panelRect.width - 8)}px`;
+        }
+
+        if (panelRect.bottom > window.innerHeight) {
+            panel.style.top = `${Math.max(0, window.innerHeight - panelRect.height - 8)}px`;
+        }
+
         return panel;
     }
 
