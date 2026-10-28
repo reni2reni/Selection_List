@@ -3090,6 +3090,8 @@
         if (historyLabel && historyLabel.textContent !== historyText) {
             historyLabel.textContent = historyText;
         }
+        item.style.display = getSectionVisible(FAVORITES_VISIBLE_KEY) ? "flex" : "none";
+        historyItem.style.display = getSectionVisible(HISTORY_VISIBLE_KEY) ? "flex" : "none";
         if (item.parentNode === toolboxRoot && item.nextSibling !== historyItem) toolboxRoot.insertBefore(historyItem, item.nextSibling);
         bindRecentBlockHistory();
         bindFavoriteFlyoutCloseReset();
@@ -3110,6 +3112,50 @@
     // お気に入り項目はBlockly標準メニューに登録する（独自ポップアップは作らない）
     registerFavoriteContextMenu();
 
+
+    // Favorites / History の表示切り替え（状態は localStorage に保存）
+    const FAVORITES_VISIBLE_KEY = "selection_list_favorites_visible_v1";
+    const HISTORY_VISIBLE_KEY = "selection_list_history_visible_v1";
+    function getSectionVisible(key) {
+        try { return localStorage.getItem(key) !== "false"; } catch (_) { return true; }
+    }
+    function addFavoritesHistoryToggles(submenu) {
+        if (!submenu) return;
+        const specs = [
+            { key: FAVORITES_VISIBLE_KEY, attr: "toggle-favorites-visibility", ja: "お気に入り表示", en: "Favorites visibility" },
+            { key: HISTORY_VISIBLE_KEY, attr: "toggle-history-visibility", ja: "履歴表示", en: "History visibility" }
+        ];
+        for (const spec of specs) {
+            let item = submenu.querySelector(`[data-selection-list-plugin="${spec.attr}"]`);
+            if (item) continue;
+            item = document.createElement("div");
+            item.setAttribute("data-selection-list-plugin", spec.attr);
+            item.className = "selection-list-plugin-menu-item";
+            Object.assign(item.style, {
+                padding: "5px 18px", whiteSpace: "nowrap", background: "rgb(22, 29, 30)",
+                color: "#61c3ff", cursor: "pointer", fontSize: "15px", lineHeight: "1.3",
+                borderTop: "1px solid #3a4648", display: "flex",
+                justifyContent: "space-between", alignItems: "center"
+            });
+            const update = () => {
+                const ja = getPortalLanguage() === "ja";
+                item.textContent = `${ja ? spec.ja : spec.en}: ${getSectionVisible(spec.key) ? "ON" : "OFF"}`;
+                item.style.color = getSectionVisible(spec.key) ? "#61c3ff" : "#8e999b";
+            };
+            item.addEventListener("mouseenter", () => item.style.background = "rgb(48, 60, 62)");
+            item.addEventListener("mouseleave", () => item.style.background = "rgb(22, 29, 30)");
+            item.addEventListener("click", event => {
+                event.preventDefault(); event.stopPropagation();
+                const next = !getSectionVisible(spec.key);
+                try { localStorage.setItem(spec.key, String(next)); } catch (_) {}
+                update();
+                installFavoriteToolboxItem();
+            }, true);
+            update();
+            submenu.appendChild(item);
+        }
+    }
+
     let isScanning = false;
     function scan() {
         if (isScanning) return; // 無限ループ防止ガード
@@ -3126,6 +3172,7 @@
                     addSelectionListMenu(submenu);
                 }
                 addTranslationToggleMenu(submenu);
+                addFavoritesHistoryToggles(submenu);
                 addCacheManagementMenu(submenu); // ★この行を追加
             }
             if (!eligible) {
