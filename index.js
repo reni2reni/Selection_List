@@ -3171,9 +3171,20 @@
     }
 
     let isScanning = false;
+    let scanScheduled = false;
+    function scheduleScan() {
+        if (scanScheduled) return;
+        scanScheduled = true;
+        setTimeout(() => {
+            scanScheduled = false;
+            scan();
+        }, 60);
+    }
     function scan() {
-        if (isScanning) return; // 無限ループ防止ガード
+        if (isScanning) return;
         isScanning = true;
+        // スキャン自身のDOM変更をMutationObserverが再検知して無限ループするのを防ぐ。
+        if (observer) observer.disconnect();
         try {
             installFavoriteToolboxItem();
             applyFavoritesHistoryVisibility();
@@ -3195,13 +3206,18 @@
             }
         } finally {
             isScanning = false;
+            if (observer) {
+                const root = document.documentElement || document.body;
+                if (root) observer.observe(root, { childList: true, subtree: true });
+            }
         }
     }
 
     function startObserver() {
         if (observer) return;
-        observer = new MutationObserver(scan);
-        observer.observe(document.documentElement || document.body, { childList: true, subtree: true });
+        observer = new MutationObserver(scheduleScan);
+        const root = document.documentElement || document.body;
+        if (root) observer.observe(root, { childList: true, subtree: true });
         scan();
     }
 
