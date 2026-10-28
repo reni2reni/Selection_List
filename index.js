@@ -2807,12 +2807,33 @@
         const list = [type, ...getRecentBlockTypes().filter(x => x !== type)].slice(0, 20);
         try { localStorage.setItem(HISTORY_BLOCKS_KEY, JSON.stringify(list)); } catch (_) {}
     }
-    function showBlockTypeFlyout(types, title) {
+    const HISTORY_CLEAR_CALLBACK = "selection_list_clear_recent_block_history_v1";
+    function showBlockTypeFlyout(types, title, isHistory = false) {
         const Blockly = _Blockly || window.Blockly, ws = getWorkspace(), flyout = getFavoriteFlyout();
         if (!Blockly || !ws || !flyout || typeof flyout.show !== "function") return;
         const xml = document.createElement("xml");
-        const label = document.createElement("label"); label.setAttribute("text", title); xml.appendChild(label);
-        for (const type of types.filter(t => !!Blockly.Blocks?.[t])) { const b = document.createElement("block"); b.setAttribute("type", type); xml.appendChild(b); }
+        if (isHistory && typeof ws.registerButtonCallback === "function" && !ws.__selectionListHistoryClearCallbackRegistered) {
+            ws.registerButtonCallback(HISTORY_CLEAR_CALLBACK, () => {
+                try { localStorage.removeItem(HISTORY_BLOCKS_KEY); } catch (_) {}
+                showBlockTypeFlyout([], getPortalLanguage() === "ja" ? "最近使用したブロック" : "Recently Used Blocks", true);
+            });
+            ws.__selectionListHistoryClearCallbackRegistered = true;
+        }
+        if (isHistory) {
+            const clearButton = document.createElement("button");
+            clearButton.setAttribute("text", getPortalLanguage() === "ja" ? "履歴をクリア" : "Clear History");
+            clearButton.setAttribute("callbackKey", HISTORY_CLEAR_CALLBACK);
+            xml.appendChild(clearButton);
+        }
+        const validTypes = (types || []).filter(t => !!Blockly.Blocks?.[t]);
+        if (!validTypes.length) {
+            const label = document.createElement("label");
+            label.setAttribute("text", getPortalLanguage() === "ja"
+                ? (isHistory ? "履歴はありません" : "ブロックがありません")
+                : (isHistory ? "No history yet" : "No blocks available"));
+            xml.appendChild(label);
+        }
+        for (const type of validTypes) { const b = document.createElement("block"); b.setAttribute("type", type); xml.appendChild(b); }
         try { flyout.show(Array.from(xml.children)); } catch (e) { console.warn("[Selection_List] block list flyout failed", e); }
     }
     // Blockly標準の右クリックメニュー末尾にお気に入り項目を追加
@@ -2825,12 +2846,13 @@
             registry.register({
                 id: "selection_list_favorite_toggle",
                 scopeType,
-                weight: 10000, // 既存の右クリックメニューの下の方に表示
+                weight: 5.5, // Blockly標準の「ブロックを削除」の直前
                 displayText: scope => {
                     const type = scope?.block?.type;
+                    const ja = getPortalLanguage() === "ja";
                     return getFavoriteBlockTypes().includes(type)
-                        ? "★ お気に入りから削除"
-                        : "★ お気に入りに追加";
+                        ? (ja ? "★ お気に入りから削除" : "★ Remove from Favorites")
+                        : (ja ? "★ お気に入りに追加" : "★ Add to Favorites");
                 },
                 preconditionFn: scope => {
                     const block = scope?.block;
@@ -2884,7 +2906,7 @@
         const favorites = getFavoriteBlockTypes().filter(type => !!Blockly.Blocks?.[type]);
         if (!favorites.length) {
             const label = document.createElement("label");
-            label.setAttribute("text", "お気に入りは未登録です");
+            label.setAttribute("text", getPortalLanguage() === "ja" ? "お気に入りは未登録です" : "No favorite blocks yet");
             xml.appendChild(label);
         } else {
             for (const type of favorites) {
@@ -2895,10 +2917,6 @@
         }
 
         try {
-            if (typeof ws.registerButtonCallback === "function" && !window.__selectionListFavoriteCallbackRegistered) {
-                ws.registerButtonCallback(FAVORITE_BUTTON_CALLBACK, () => openFavoriteManager());
-                window.__selectionListFavoriteCallbackRegistered = true;
-            }
             flyout.show(Array.from(xml.children));
             if (window._favoriteHistoryOutsideClick) {
                 document.removeEventListener(
@@ -2995,18 +3013,28 @@
         search.focus();
     }
 
+    function clearFavoriteToolboxHighlight() {
+        document.querySelectorAll('[data-selection-list-plugin="favorite-toolbox-item"]').forEach(el => {
+            el.style.background = ""; // ツールボックス本来の黒背景に戻す
+        });
+    }
+    function bindFavoriteFlyoutCloseReset() {
+        const flyout = getFavoriteFlyout();
+        if (!flyout || flyout.__selectionListFavoriteCloseResetBound || typeof flyout.hide !== "function") return;
+        const originalHide = flyout.hide;
+        flyout.hide = function (...args) {
+            const result = originalHide.apply(this, args);
+            clearFavoriteToolboxHighlight();
+            return result;
+        };
+        flyout.__selectionListFavoriteCloseResetBound = true;
+    }
+
     function installFavoriteToolboxItem() {
         const ws = getWorkspace();
         const toolbox = ws?.getToolbox?.();
         const toolboxRoot = document.querySelector(".blocklyToolboxContents .blocklyTreeRoot, .blocklyToolboxContents, .blocklyTreeRoot");
         if (!ws || !toolbox || !toolboxRoot) return;
-
-        if (!window.__selectionListFavoriteCallbackRegistered && typeof ws.registerButtonCallback === "function") {
-            try {
-                ws.registerButtonCallback(FAVORITE_BUTTON_CALLBACK, () => openFavoriteManager());
-                window.__selectionListFavoriteCallbackRegistered = true;
-            } catch (_) { }
-        }
 
         let item = toolboxRoot.querySelector(':scope > [data-selection-list-plugin="favorite-toolbox-item"]');
         if (!item) {
@@ -3018,7 +3046,7 @@
             Object.assign(item.style, { display: "flex", alignItems: "center", minHeight: "32px", padding: "0 8px", boxSizing: "border-box", cursor: "pointer", fontWeight: "700", borderBottom: "1px solid rgba(120,140,145,.35)" });
             const label = document.createElement("span");
             label.className = "blocklyTreeLabel";
-            label.textContent = "★ お気に入り";
+            label.textContent = getPortalLanguage() === "ja" ? "★ お気に入り" : "★ Favorites";
             Object.assign(label.style, { paddingLeft: "8px", whiteSpace: "nowrap" });
             item.appendChild(label);
             const activate = event => {
@@ -3034,18 +3062,25 @@
             const searchRow = rows.find(el => /検索結果|search results|search result/i.test(el.textContent || ""));
             if (searchRow?.nextSibling) toolboxRoot.insertBefore(item, searchRow.nextSibling); else toolboxRoot.insertBefore(item, toolboxRoot.firstChild);
         }
+        // Keep the custom labels localized when the portal language changes.
+        const favoriteLabel = item.querySelector(".blocklyTreeLabel");
+        if (favoriteLabel) favoriteLabel.textContent = getPortalLanguage() === "ja" ? "★ お気に入り" : "★ Favorites";
+
         // 履歴項目はお気に入りの直下に配置
         let historyItem = toolboxRoot.querySelector(':scope > [data-selection-list-plugin="history-toolbox-item"]');
         if (!historyItem) {
             historyItem = document.createElement("div"); historyItem.setAttribute("data-selection-list-plugin", "history-toolbox-item");
             historyItem.setAttribute("role", "treeitem"); historyItem.setAttribute("tabindex", "0"); historyItem.className = "blocklyTreeRow";
             Object.assign(historyItem.style, { display:"flex", alignItems:"center", minHeight:"32px", padding:"0 8px", boxSizing:"border-box", cursor:"pointer", fontWeight:"700" });
-            const label = document.createElement("span"); label.className = "blocklyTreeLabel"; label.textContent = "◷ 履歴"; label.style.paddingLeft = "8px"; historyItem.appendChild(label);
-            const activateHistory = event => { event.preventDefault(); event.stopPropagation(); showBlockTypeFlyout(getRecentBlockTypes(), "最近使用したブロック"); };
+            const label = document.createElement("span"); label.className = "blocklyTreeLabel"; label.textContent = getPortalLanguage() === "ja" ? "◷ 履歴" : "◷ History"; label.style.paddingLeft = "8px"; historyItem.appendChild(label);
+            const activateHistory = event => { event.preventDefault(); event.stopPropagation(); showBlockTypeFlyout(getRecentBlockTypes(), getPortalLanguage() === "ja" ? "最近使用したブロック" : "Recently Used Blocks", true); };
             historyItem.addEventListener("click", activateHistory); historyItem.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") activateHistory(event); });
         }
+        const historyLabel = historyItem.querySelector(".blocklyTreeLabel");
+        if (historyLabel) historyLabel.textContent = getPortalLanguage() === "ja" ? "◷ 履歴" : "◷ History";
         if (item.parentNode === toolboxRoot && item.nextSibling !== historyItem) toolboxRoot.insertBefore(historyItem, item.nextSibling);
         bindRecentBlockHistory();
+        bindFavoriteFlyoutCloseReset();
         favoriteToolboxItemBound = true;
     }
 
