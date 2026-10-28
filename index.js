@@ -2815,12 +2815,21 @@
         for (const type of types.filter(t => !!Blockly.Blocks?.[t])) { const b = document.createElement("block"); b.setAttribute("type", type); xml.appendChild(b); }
         try { flyout.show(Array.from(xml.children)); } catch (e) { console.warn("[Selection_List] block list flyout failed", e); }
     }
-    function showFavoriteRemovalMenu(event, type) {
+    function showFavoriteContextMenu(event, type) {
         document.querySelector('[data-selection-list-plugin="favorite-remove-menu"]')?.remove();
-        const menu = document.createElement("div"); menu.setAttribute("data-selection-list-plugin", "favorite-remove-menu");
-        Object.assign(menu.style, { position:"fixed", left:`${event.clientX}px`, top:`${event.clientY}px`, zIndex:"2147483647", background:"#202729", color:"#fff", border:"1px solid #667477", borderRadius:"4px", padding:"8px 12px", boxShadow:"0 4px 16px #0008", cursor:"pointer", font:"13px Arial,sans-serif" });
-        menu.textContent = "お気に入りから削除";
-        menu.addEventListener("click", e => { e.stopPropagation(); saveFavoriteBlockTypes(getFavoriteBlockTypes().filter(t => t !== type)); menu.remove(); showFavoriteFlyout(); });
+        const isFavorite = getFavoriteBlockTypes().includes(type);
+        const menu = document.createElement("div");
+        menu.setAttribute("data-selection-list-plugin", "favorite-remove-menu");
+        Object.assign(menu.style, { position:"fixed", left:`${event.clientX}px`, top:`${event.clientY}px`, zIndex:"2147483647", background:"#202729", color:"#fff", border:"1px solid #667477", borderRadius:"4px", padding:"8px 12px", boxShadow:"0 4px 16px #0008", cursor:"pointer", font:"13px Arial,sans-serif", userSelect:"none" });
+        menu.textContent = isFavorite ? "★ お気に入りから削除" : "★ お気に入りに追加";
+        menu.addEventListener("click", e => {
+            e.stopPropagation();
+            const favorites = getFavoriteBlockTypes();
+            if (favorites.includes(type)) saveFavoriteBlockTypes(favorites.filter(t => t !== type));
+            else saveFavoriteBlockTypes([...favorites, type]);
+            menu.remove();
+            showFavoriteFlyout();
+        });
         document.body.appendChild(menu);
         const close = e => { if (!menu.contains(e.target)) { menu.remove(); document.removeEventListener("pointerdown", close, true); } };
         setTimeout(() => document.addEventListener("pointerdown", close, true), 0);
@@ -2853,11 +2862,6 @@
         if (!Blockly || !ws || !flyout || typeof flyout.show !== "function") return;
 
         const xml = document.createElement("xml");
-        const addButton = document.createElement("button");
-        addButton.setAttribute("text", "＋ 新規登録 / 編集");
-        addButton.setAttribute("callbackKey", FAVORITE_BUTTON_CALLBACK);
-        xml.appendChild(addButton);
-
         const favorites = getFavoriteBlockTypes().filter(type => !!Blockly.Blocks?.[type]);
         if (!favorites.length) {
             const label = document.createElement("label");
@@ -2877,38 +2881,6 @@
                 window.__selectionListFavoriteCallbackRegistered = true;
             }
             flyout.show(Array.from(xml.children));
-            if (window._favoriteHistoryOutsideClick) {
-                document.removeEventListener(
-                    'click',
-                    window._favoriteHistoryOutsideClick,
-                    true
-                );
-            }
-
-            window._favoriteHistoryOutsideClick = function (event) {
-                const flyout = document.querySelector('.blocklyFlyout');
-                const toolbox = document.querySelector('.blocklyToolboxDiv');
-
-                if (
-                    flyout &&
-                    !flyout.contains(event.target) &&
-                    (!toolbox || !toolbox.contains(event.target))
-                ) {
-                    const workspace = Blockly.getMainWorkspace();
-
-                    if (workspace && workspace.getFlyout()) {
-                        workspace.getFlyout().hide();
-                    }
-                }
-            };
-
-            setTimeout(() => {
-                document.addEventListener(
-                    'click',
-                    window._favoriteHistoryOutsideClick,
-                    true
-                );
-            }, 0);
         } catch (error) {
             console.warn("[Selection_List] favorite flyout could not be shown", error);
         }
@@ -3038,16 +3010,19 @@
         });
     }
     document.addEventListener("contextmenu", event => {
-        const el = event.target?.closest?.(".blocklyFlyout g.blocklyDraggable, .blocklyFlyout .blocklyDraggable");
-        if (!el) return;
-        const id = el.getAttribute("data-id") || el.dataset?.id;
+        const blockEl = event.target?.closest?.(".blocklyFlyout g.blocklyDraggable, .blocklyFlyout .blocklyDraggable, .blocklyWorkspace g.blocklyDraggable, .blocklyWorkspace .blocklyDraggable, g.blocklyDraggable");
+        if (!blockEl) return;
+        const id = blockEl.getAttribute("data-id") || blockEl.dataset?.id;
+        if (!id) return;
+        const mainWs = getWorkspace();
         const flyout = getFavoriteFlyout();
-        const block = flyout?.getWorkspace?.()?.getBlockById?.(id) || flyout?.workspace_?.getBlockById?.(id);
+        const block = mainWs?.getBlockById?.(id) || flyout?.getWorkspace?.()?.getBlockById?.(id) || flyout?.workspace_?.getBlockById?.(id);
         const type = block?.type;
-        if (type && getFavoriteBlockTypes().includes(type)) {
-            event.preventDefault(); event.stopPropagation();
-            showFavoriteRemovalMenu(event, type);
-        }
+        const Blockly = _Blockly || window.Blockly;
+        if (!type || !Blockly?.Blocks?.[type]) return;
+        event.preventDefault();
+        event.stopPropagation();
+        showFavoriteContextMenu(event, type);
     }, true);
 
     let isScanning = false;
