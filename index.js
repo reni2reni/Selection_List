@@ -2900,6 +2900,38 @@
                 window.__selectionListFavoriteCallbackRegistered = true;
             }
             flyout.show(Array.from(xml.children));
+            if (window._favoriteHistoryOutsideClick) {
+                document.removeEventListener(
+                    'click',
+                    window._favoriteHistoryOutsideClick,
+                    true
+                );
+            }
+
+            window._favoriteHistoryOutsideClick = function (event) {
+                const flyout = document.querySelector('.blocklyFlyout');
+                const toolbox = document.querySelector('.blocklyToolboxDiv');
+
+                if (
+                    flyout &&
+                    !flyout.contains(event.target) &&
+                    (!toolbox || !toolbox.contains(event.target))
+                ) {
+                    const workspace = Blockly.getMainWorkspace();
+
+                    if (workspace && workspace.getFlyout()) {
+                        workspace.getFlyout().hide();
+                    }
+                }
+            };
+
+            setTimeout(() => {
+                document.addEventListener(
+                    'click',
+                    window._favoriteHistoryOutsideClick,
+                    true
+                );
+            }, 0);
         } catch (error) {
             console.warn("[Selection_List] favorite flyout could not be shown", error);
         }
