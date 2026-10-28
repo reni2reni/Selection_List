@@ -2918,38 +2918,6 @@
 
         try {
             flyout.show(Array.from(xml.children));
-            if (window._favoriteHistoryOutsideClick) {
-                document.removeEventListener(
-                    'click',
-                    window._favoriteHistoryOutsideClick,
-                    true
-                );
-            }
-
-            window._favoriteHistoryOutsideClick = function (event) {
-                const flyout = document.querySelector('.blocklyFlyout');
-                const toolbox = document.querySelector('.blocklyToolboxDiv');
-
-                if (
-                    flyout &&
-                    !flyout.contains(event.target) &&
-                    (!toolbox || !toolbox.contains(event.target))
-                ) {
-                    const workspace = Blockly.getMainWorkspace();
-
-                    if (workspace && workspace.getFlyout()) {
-                        workspace.getFlyout().hide();
-                    }
-                }
-            };
-
-            setTimeout(() => {
-                document.addEventListener(
-                    'click',
-                    window._favoriteHistoryOutsideClick,
-                    true
-                );
-            }, 0);
         } catch (error) {
             console.warn("[Selection_List] favorite flyout could not be shown", error);
         }
@@ -3090,8 +3058,6 @@
         if (historyLabel && historyLabel.textContent !== historyText) {
             historyLabel.textContent = historyText;
         }
-        item.style.display = getSectionVisible(FAVORITES_VISIBLE_KEY) ? "flex" : "none";
-        historyItem.style.display = getSectionVisible(HISTORY_VISIBLE_KEY) ? "flex" : "none";
         if (item.parentNode === toolboxRoot && item.nextSibling !== historyItem) toolboxRoot.insertBefore(historyItem, item.nextSibling);
         bindRecentBlockHistory();
         bindFavoriteFlyoutCloseReset();
@@ -3112,82 +3078,12 @@
     // お気に入り項目はBlockly標準メニューに登録する（独自ポップアップは作らない）
     registerFavoriteContextMenu();
 
-
-    // Favorites / History の表示切り替え（状態は localStorage に保存）
-    const FAVORITES_VISIBLE_KEY = "selection_list_favorites_visible_v1";
-    const HISTORY_VISIBLE_KEY = "selection_list_history_visible_v1";
-    function getSectionVisible(key) {
-        try { return localStorage.getItem(key) !== "false"; } catch (_) { return true; }
-    }
-    function applyFavoritesHistoryVisibility() {
-        const favoritesVisible = getSectionVisible(FAVORITES_VISIBLE_KEY);
-        const historyVisible = getSectionVisible(HISTORY_VISIBLE_KEY);
-        document.querySelectorAll('[data-selection-list-plugin="favorite-toolbox-item"]').forEach(item => {
-            item.style.display = favoritesVisible ? "flex" : "none";
-        });
-        document.querySelectorAll('[data-selection-list-plugin="history-toolbox-item"]').forEach(item => {
-            item.style.display = historyVisible ? "flex" : "none";
-        });
-        return favoritesVisible || historyVisible;
-    }
-
-    function addFavoritesHistoryToggles(submenu) {
-        if (!submenu) return;
-        const attr = "toggle-favorites-history-visibility";
-        let item = submenu.querySelector(`[data-selection-list-plugin="${attr}"]`);
-        if (!item) {
-            item = document.createElement("div");
-            item.setAttribute("data-selection-list-plugin", attr);
-            item.className = "selection-list-plugin-menu-item";
-            Object.assign(item.style, {
-                padding: "5px 18px", whiteSpace: "nowrap", background: "rgb(22, 29, 30)",
-                color: "#61c3ff", cursor: "pointer", fontSize: "15px", lineHeight: "1.3",
-                borderTop: "1px solid #3a4648", display: "flex",
-                justifyContent: "space-between", alignItems: "center"
-            });
-            item.addEventListener("mouseenter", () => item.style.background = "rgb(48, 60, 62)");
-            item.addEventListener("mouseleave", () => item.style.background = "rgb(22, 29, 30)");
-            item.addEventListener("click", event => {
-                event.preventDefault();
-                event.stopPropagation();
-                // One combined toggle: if either section is visible, hide both; otherwise show both.
-                const showNext = !(getSectionVisible(FAVORITES_VISIBLE_KEY) || getSectionVisible(HISTORY_VISIBLE_KEY));
-                try {
-                    localStorage.setItem(FAVORITES_VISIBLE_KEY, String(showNext));
-                    localStorage.setItem(HISTORY_VISIBLE_KEY, String(showNext));
-                } catch (_) {}
-                applyFavoritesHistoryVisibility(); // Apply immediately, without waiting for MutationObserver.
-                updateLabel();
-            }, true);
-            submenu.appendChild(item);
-        }
-        function updateLabel() {
-            const ja = getPortalLanguage() === "ja";
-            const bothVisible = getSectionVisible(FAVORITES_VISIBLE_KEY) && getSectionVisible(HISTORY_VISIBLE_KEY);
-            item.textContent = `${ja ? "お気に入り・履歴表示" : "Favorites & History"}: ${bothVisible ? "ON" : "OFF"}`;
-            item.style.color = bothVisible ? "#61c3ff" : "#8e999b";
-        }
-        updateLabel();
-    }
-
     let isScanning = false;
-    let scanScheduled = false;
-    function scheduleScan() {
-        if (scanScheduled) return;
-        scanScheduled = true;
-        setTimeout(() => {
-            scanScheduled = false;
-            scan();
-        }, 60);
-    }
     function scan() {
-        if (isScanning) return;
+        if (isScanning) return; // 無限ループ防止ガード
         isScanning = true;
-        // スキャン自身のDOM変更をMutationObserverが再検知して無限ループするのを防ぐ。
-        if (observer) observer.disconnect();
         try {
             installFavoriteToolboxItem();
-            applyFavoritesHistoryVisibility();
             registerFavoriteContextMenu();
             const block = getCurrentContextBlock();
             const eligible = isSelectionListBlock(block);
@@ -3198,7 +3094,6 @@
                     addSelectionListMenu(submenu);
                 }
                 addTranslationToggleMenu(submenu);
-                addFavoritesHistoryToggles(submenu);
                 addCacheManagementMenu(submenu); // ★この行を追加
             }
             if (!eligible) {
@@ -3206,18 +3101,13 @@
             }
         } finally {
             isScanning = false;
-            if (observer) {
-                const root = document.documentElement || document.body;
-                if (root) observer.observe(root, { childList: true, subtree: true });
-            }
         }
     }
 
     function startObserver() {
         if (observer) return;
-        observer = new MutationObserver(scheduleScan);
-        const root = document.documentElement || document.body;
-        if (root) observer.observe(root, { childList: true, subtree: true });
+        observer = new MutationObserver(scan);
+        observer.observe(document.documentElement || document.body, { childList: true, subtree: true });
         scan();
     }
 
