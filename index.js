@@ -2815,24 +2815,43 @@
         for (const type of types.filter(t => !!Blockly.Blocks?.[t])) { const b = document.createElement("block"); b.setAttribute("type", type); xml.appendChild(b); }
         try { flyout.show(Array.from(xml.children)); } catch (e) { console.warn("[Selection_List] block list flyout failed", e); }
     }
-    function showFavoriteContextMenu(event, type) {
-        document.querySelector('[data-selection-list-plugin="favorite-remove-menu"]')?.remove();
-        const isFavorite = getFavoriteBlockTypes().includes(type);
-        const menu = document.createElement("div");
-        menu.setAttribute("data-selection-list-plugin", "favorite-remove-menu");
-        Object.assign(menu.style, { position:"fixed", left:`${event.clientX}px`, top:`${event.clientY}px`, zIndex:"2147483647", background:"#202729", color:"#fff", border:"1px solid #667477", borderRadius:"4px", padding:"8px 12px", boxShadow:"0 4px 16px #0008", cursor:"pointer", font:"13px Arial,sans-serif", userSelect:"none" });
-        menu.textContent = isFavorite ? "★ お気に入りから削除" : "★ お気に入りに追加";
-        menu.addEventListener("click", e => {
-            e.stopPropagation();
-            const favorites = getFavoriteBlockTypes();
-            if (favorites.includes(type)) saveFavoriteBlockTypes(favorites.filter(t => t !== type));
-            else saveFavoriteBlockTypes([...favorites, type]);
-            menu.remove();
-            showFavoriteFlyout();
-        });
-        document.body.appendChild(menu);
-        const close = e => { if (!menu.contains(e.target)) { menu.remove(); document.removeEventListener("pointerdown", close, true); } };
-        setTimeout(() => document.addEventListener("pointerdown", close, true), 0);
+    // Blockly標準の右クリックメニュー末尾にお気に入り項目を追加
+    function registerFavoriteContextMenu() {
+        const Blockly = _Blockly || window.Blockly;
+        const registry = Blockly?.ContextMenuRegistry?.registry;
+        const scopeType = Blockly?.ContextMenuRegistry?.ScopeType?.BLOCK || "block";
+        if (!registry || typeof registry.register !== "function" || window.__selectionListFavoriteContextMenuRegistered) return;
+        try {
+            registry.register({
+                id: "selection_list_favorite_toggle",
+                scopeType,
+                weight: 10000, // 既存の右クリックメニューの下の方に表示
+                displayText: scope => {
+                    const type = scope?.block?.type;
+                    return getFavoriteBlockTypes().includes(type)
+                        ? "★ お気に入りから削除"
+                        : "★ お気に入りに追加";
+                },
+                preconditionFn: scope => {
+                    const block = scope?.block;
+                    const BlocklyNow = _Blockly || window.Blockly;
+                    if (!block?.type || !BlocklyNow?.Blocks?.[block.type]) return "hidden";
+                    return "enabled";
+                },
+                callback: scope => {
+                    const type = scope?.block?.type;
+                    const BlocklyNow = _Blockly || window.Blockly;
+                    if (!type || !BlocklyNow?.Blocks?.[type]) return;
+                    const favorites = getFavoriteBlockTypes();
+                    if (favorites.includes(type)) saveFavoriteBlockTypes(favorites.filter(t => t !== type));
+                    else saveFavoriteBlockTypes([...favorites, type]);
+                    showFavoriteFlyout();
+                }
+            });
+            window.__selectionListFavoriteContextMenuRegistered = true;
+        } catch (error) {
+            console.warn("[Selection_List] favorite context menu registration failed", error);
+        }
     }
 
     function getFavoriteBlockTypes() {
@@ -2881,38 +2900,6 @@
                 window.__selectionListFavoriteCallbackRegistered = true;
             }
             flyout.show(Array.from(xml.children));
-            if (window._favoriteHistoryOutsideClick) {
-                document.removeEventListener(
-                    'click',
-                    window._favoriteHistoryOutsideClick,
-                    true
-                );
-            }
-
-            window._favoriteHistoryOutsideClick = function (event) {
-                const flyout = document.querySelector('.blocklyFlyout');
-                const toolbox = document.querySelector('.blocklyToolboxDiv');
-
-                if (
-                    flyout &&
-                    !flyout.contains(event.target) &&
-                    (!toolbox || !toolbox.contains(event.target))
-                ) {
-                    const workspace = Blockly.getMainWorkspace();
-
-                    if (workspace && workspace.getFlyout()) {
-                        workspace.getFlyout().hide();
-                    }
-                }
-            };
-
-            setTimeout(() => {
-                document.addEventListener(
-                    'click',
-                    window._favoriteHistoryOutsideClick,
-                    true
-                );
-            }, 0);
         } catch (error) {
             console.warn("[Selection_List] favorite flyout could not be shown", error);
         }
@@ -3041,21 +3028,8 @@
             for (const id of ids) { const block = ws.getBlockById?.(id); if (block?.type) recordRecentBlock(block.type); }
         });
     }
-    document.addEventListener("contextmenu", event => {
-        const blockEl = event.target?.closest?.(".blocklyFlyout g.blocklyDraggable, .blocklyFlyout .blocklyDraggable, .blocklyWorkspace g.blocklyDraggable, .blocklyWorkspace .blocklyDraggable, g.blocklyDraggable");
-        if (!blockEl) return;
-        const id = blockEl.getAttribute("data-id") || blockEl.dataset?.id;
-        if (!id) return;
-        const mainWs = getWorkspace();
-        const flyout = getFavoriteFlyout();
-        const block = mainWs?.getBlockById?.(id) || flyout?.getWorkspace?.()?.getBlockById?.(id) || flyout?.workspace_?.getBlockById?.(id);
-        const type = block?.type;
-        const Blockly = _Blockly || window.Blockly;
-        if (!type || !Blockly?.Blocks?.[type]) return;
-        event.preventDefault();
-        event.stopPropagation();
-        showFavoriteContextMenu(event, type);
-    }, true);
+    // お気に入り項目はBlockly標準メニューに登録する（独自ポップアップは作らない）
+    registerFavoriteContextMenu();
 
     let isScanning = false;
     function scan() {
@@ -3063,6 +3037,7 @@
         isScanning = true;
         try {
             installFavoriteToolboxItem();
+            registerFavoriteContextMenu();
             const block = getCurrentContextBlock();
             const eligible = isSelectionListBlock(block);
             const submenus = document.querySelectorAll(".bf6-experience-manager-options-submenu");
