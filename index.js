@@ -2790,11 +2790,173 @@
         }, true);
     }
 
+    // ============================================================
+    // お気に入りブロック（左ツールボックス項目＋右フライアウト）
+    // ============================================================
+    const FAVORITE_BLOCKS_KEY = "selection_list_favorite_block_types_v1";
+    const FAVORITE_BUTTON_CALLBACK = "selection_list_open_favorite_manager_v1";
+    let favoriteToolboxItemBound = false;
+
+    function getFavoriteBlockTypes() {
+        try {
+            const value = JSON.parse(localStorage.getItem(FAVORITE_BLOCKS_KEY) || "[]");
+            return Array.isArray(value) ? [...new Set(value.map(normalize).filter(Boolean))] : [];
+        } catch (_) { return []; }
+    }
+
+    function saveFavoriteBlockTypes(types) {
+        const Blockly = _Blockly || window.Blockly;
+        const valid = [...new Set((types || []).map(normalize).filter(type => !!Blockly?.Blocks?.[type]))];
+        try { localStorage.setItem(FAVORITE_BLOCKS_KEY, JSON.stringify(valid)); } catch (_) { }
+        return valid;
+    }
+
+    function getFavoriteFlyout() {
+        const ws = getWorkspace();
+        const toolbox = ws?.getToolbox?.();
+        try { return toolbox?.getFlyout?.() || ws?.getFlyout?.() || toolbox?.flyout_ || null; } catch (_) { return null; }
+    }
+
+    function showFavoriteFlyout() {
+        const Blockly = _Blockly || window.Blockly;
+        const ws = getWorkspace();
+        const flyout = getFavoriteFlyout();
+        if (!Blockly || !ws || !flyout || typeof flyout.show !== "function") return;
+
+        const xml = document.createElement("xml");
+        const addButton = document.createElement("button");
+        addButton.setAttribute("text", "＋ 新規登録 / 編集");
+        addButton.setAttribute("callbackKey", FAVORITE_BUTTON_CALLBACK);
+        xml.appendChild(addButton);
+
+        const favorites = getFavoriteBlockTypes().filter(type => !!Blockly.Blocks?.[type]);
+        if (!favorites.length) {
+            const label = document.createElement("label");
+            label.setAttribute("text", "お気に入りは未登録です");
+            xml.appendChild(label);
+        } else {
+            for (const type of favorites) {
+                const blockNode = document.createElement("block");
+                blockNode.setAttribute("type", type);
+                xml.appendChild(blockNode);
+            }
+        }
+
+        try {
+            if (typeof ws.registerButtonCallback === "function" && !window.__selectionListFavoriteCallbackRegistered) {
+                ws.registerButtonCallback(FAVORITE_BUTTON_CALLBACK, () => openFavoriteManager());
+                window.__selectionListFavoriteCallbackRegistered = true;
+            }
+            flyout.show(Array.from(xml.children));
+        } catch (error) {
+            console.warn("[Selection_List] favorite flyout could not be shown", error);
+        }
+    }
+
+    function openFavoriteManager() {
+        const Blockly = _Blockly || window.Blockly;
+        const types = Object.keys(Blockly?.Blocks || {}).filter(type => !/^(placeholder|dummy|temp)/i.test(type)).sort((a, b) => a.localeCompare(b));
+        const selected = new Set(getFavoriteBlockTypes());
+        document.querySelector('[data-selection-list-plugin="favorite-manager"]')?.remove();
+
+        const overlay = document.createElement("div");
+        overlay.setAttribute("data-selection-list-plugin", "favorite-manager");
+        Object.assign(overlay.style, { position: "fixed", inset: "0", zIndex: "2147483647", background: "rgba(0,0,0,.55)", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "Arial,sans-serif" });
+        const panel = document.createElement("div");
+        Object.assign(panel.style, { width: "min(620px, 92vw)", height: "min(720px, 88vh)", display: "flex", flexDirection: "column", background: "#171d1f", color: "#f3f6f6", border: "1px solid #526064", borderRadius: "8px", boxShadow: "0 12px 40px rgba(0,0,0,.55)", overflow: "hidden" });
+        const header = document.createElement("div");
+        header.textContent = "お気に入りブロックの新規登録・編集";
+        Object.assign(header.style, { padding: "14px 16px", fontSize: "17px", fontWeight: "700", borderBottom: "1px solid #394548" });
+        const search = document.createElement("input");
+        search.type = "search";
+        search.placeholder = "ブロック名で検索…";
+        Object.assign(search.style, { margin: "12px", padding: "10px", background: "#0d1112", color: "white", border: "1px solid #4b5b5e", borderRadius: "4px" });
+        const list = document.createElement("div");
+        Object.assign(list.style, { flex: "1", overflow: "auto", padding: "0 12px" });
+        const entries = [];
+        for (const type of types) {
+            const label = document.createElement("label");
+            Object.assign(label.style, { display: "flex", gap: "10px", alignItems: "center", padding: "7px 8px", borderBottom: "1px solid #2b3436", cursor: "pointer" });
+            const checkbox = document.createElement("input");
+            checkbox.type = "checkbox";
+            checkbox.checked = selected.has(type);
+            const text = document.createElement("span");
+            text.textContent = type;
+            label.append(checkbox, text);
+            list.appendChild(label);
+            entries.push({ label, checkbox, type });
+        }
+        search.addEventListener("input", () => {
+            const q = normalize(search.value).toLowerCase();
+            for (const entry of entries) entry.label.style.display = entry.type.toLowerCase().includes(q) ? "flex" : "none";
+        });
+        const footer = document.createElement("div");
+        Object.assign(footer.style, { display: "flex", justifyContent: "flex-end", gap: "8px", padding: "12px", borderTop: "1px solid #394548" });
+        const cancel = document.createElement("button");
+        cancel.textContent = "キャンセル";
+        const save = document.createElement("button");
+        save.textContent = "保存";
+        for (const button of [cancel, save]) Object.assign(button.style, { padding: "9px 16px", border: "1px solid #526064", borderRadius: "4px", background: "#263235", color: "white", cursor: "pointer" });
+        cancel.addEventListener("click", () => overlay.remove());
+        save.addEventListener("click", () => {
+            saveFavoriteBlockTypes(entries.filter(entry => entry.checkbox.checked).map(entry => entry.type));
+            overlay.remove();
+            showFavoriteFlyout();
+        });
+        footer.append(cancel, save);
+        panel.append(header, search, list, footer);
+        overlay.appendChild(panel);
+        overlay.addEventListener("click", event => { if (event.target === overlay) overlay.remove(); });
+        document.body.appendChild(overlay);
+        search.focus();
+    }
+
+    function installFavoriteToolboxItem() {
+        const ws = getWorkspace();
+        const toolbox = ws?.getToolbox?.();
+        const toolboxRoot = document.querySelector(".blocklyToolboxContents .blocklyTreeRoot, .blocklyToolboxContents, .blocklyTreeRoot");
+        if (!ws || !toolbox || !toolboxRoot) return;
+
+        if (!window.__selectionListFavoriteCallbackRegistered && typeof ws.registerButtonCallback === "function") {
+            try {
+                ws.registerButtonCallback(FAVORITE_BUTTON_CALLBACK, () => openFavoriteManager());
+                window.__selectionListFavoriteCallbackRegistered = true;
+            } catch (_) { }
+        }
+
+        let item = toolboxRoot.querySelector(':scope > [data-selection-list-plugin="favorite-toolbox-item"]');
+        if (!item) {
+            item = document.createElement("div");
+            item.setAttribute("data-selection-list-plugin", "favorite-toolbox-item");
+            item.setAttribute("role", "treeitem");
+            item.setAttribute("tabindex", "0");
+            item.className = "blocklyTreeRow";
+            Object.assign(item.style, { display: "flex", alignItems: "center", minHeight: "32px", padding: "0 8px", boxSizing: "border-box", cursor: "pointer", fontWeight: "700", borderBottom: "1px solid rgba(120,140,145,.35)" });
+            const label = document.createElement("span");
+            label.className = "blocklyTreeLabel";
+            label.textContent = "★ お気に入り";
+            Object.assign(label.style, { paddingLeft: "8px", whiteSpace: "nowrap" });
+            item.appendChild(label);
+            const activate = event => {
+                event.preventDefault();
+                event.stopPropagation();
+                document.querySelectorAll('[data-selection-list-plugin="favorite-toolbox-item"]').forEach(el => { el.style.background = ""; });
+                item.style.background = "rgba(100,160,220,.22)";
+                showFavoriteFlyout();
+            };
+            item.addEventListener("click", activate);
+            item.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") activate(event); });
+            toolboxRoot.insertBefore(item, toolboxRoot.firstChild);
+        }
+        favoriteToolboxItemBound = true;
+    }
+
     let isScanning = false;
     function scan() {
         if (isScanning) return; // 無限ループ防止ガード
         isScanning = true;
         try {
+            installFavoriteToolboxItem();
             const block = getCurrentContextBlock();
             const eligible = isSelectionListBlock(block);
             const submenus = document.querySelectorAll(".bf6-experience-manager-options-submenu");
@@ -2838,6 +3000,7 @@
     }, true);
 
     plugin.initializeWorkspace = async function () {
+        installFavoriteToolboxItem();
         bindNativeHelpTranslation();
         bindFlyoutHoverListener();
         bindNativeTooltipTranslation();
