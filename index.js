@@ -2795,7 +2795,36 @@
     // ============================================================
     const FAVORITE_BLOCKS_KEY = "selection_list_favorite_block_types_v1";
     const FAVORITE_BUTTON_CALLBACK = "selection_list_open_favorite_manager_v1";
+    const HISTORY_BLOCKS_KEY = "selection_list_recent_block_types_v1";
     let favoriteToolboxItemBound = false;
+
+    function getRecentBlockTypes() {
+        try { const v = JSON.parse(localStorage.getItem(HISTORY_BLOCKS_KEY) || "[]"); return Array.isArray(v) ? [...new Set(v.filter(x => typeof x === "string"))].slice(0, 20) : []; } catch (_) { return []; }
+    }
+    function recordRecentBlock(type) {
+        const Blockly = _Blockly || window.Blockly;
+        if (!type || !Blockly?.Blocks?.[type]) return;
+        const list = [type, ...getRecentBlockTypes().filter(x => x !== type)].slice(0, 20);
+        try { localStorage.setItem(HISTORY_BLOCKS_KEY, JSON.stringify(list)); } catch (_) {}
+    }
+    function showBlockTypeFlyout(types, title) {
+        const Blockly = _Blockly || window.Blockly, ws = getWorkspace(), flyout = getFavoriteFlyout();
+        if (!Blockly || !ws || !flyout || typeof flyout.show !== "function") return;
+        const xml = document.createElement("xml");
+        const label = document.createElement("label"); label.setAttribute("text", title); xml.appendChild(label);
+        for (const type of types.filter(t => !!Blockly.Blocks?.[t])) { const b = document.createElement("block"); b.setAttribute("type", type); xml.appendChild(b); }
+        try { flyout.show(Array.from(xml.children)); } catch (e) { console.warn("[Selection_List] block list flyout failed", e); }
+    }
+    function showFavoriteRemovalMenu(event, type) {
+        document.querySelector('[data-selection-list-plugin="favorite-remove-menu"]')?.remove();
+        const menu = document.createElement("div"); menu.setAttribute("data-selection-list-plugin", "favorite-remove-menu");
+        Object.assign(menu.style, { position:"fixed", left:`${event.clientX}px`, top:`${event.clientY}px`, zIndex:"2147483647", background:"#202729", color:"#fff", border:"1px solid #667477", borderRadius:"4px", padding:"8px 12px", boxShadow:"0 4px 16px #0008", cursor:"pointer", font:"13px Arial,sans-serif" });
+        menu.textContent = "お気に入りから削除";
+        menu.addEventListener("click", e => { e.stopPropagation(); saveFavoriteBlockTypes(getFavoriteBlockTypes().filter(t => t !== type)); menu.remove(); showFavoriteFlyout(); });
+        document.body.appendChild(menu);
+        const close = e => { if (!menu.contains(e.target)) { menu.remove(); document.removeEventListener("pointerdown", close, true); } };
+        setTimeout(() => document.addEventListener("pointerdown", close, true), 0);
+    }
 
     function getFavoriteBlockTypes() {
         try {
@@ -2978,10 +3007,48 @@
             };
             item.addEventListener("click", activate);
             item.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") activate(event); });
-            toolboxRoot.insertBefore(item, toolboxRoot.firstChild);
+            const rows = Array.from(toolboxRoot.children);
+            const searchRow = rows.find(el => /検索結果|search results|search result/i.test(el.textContent || ""));
+            if (searchRow?.nextSibling) toolboxRoot.insertBefore(item, searchRow.nextSibling); else toolboxRoot.insertBefore(item, toolboxRoot.firstChild);
         }
+        // 履歴項目はお気に入りの直下に配置
+        let historyItem = toolboxRoot.querySelector(':scope > [data-selection-list-plugin="history-toolbox-item"]');
+        if (!historyItem) {
+            historyItem = document.createElement("div"); historyItem.setAttribute("data-selection-list-plugin", "history-toolbox-item");
+            historyItem.setAttribute("role", "treeitem"); historyItem.setAttribute("tabindex", "0"); historyItem.className = "blocklyTreeRow";
+            Object.assign(historyItem.style, { display:"flex", alignItems:"center", minHeight:"32px", padding:"0 8px", boxSizing:"border-box", cursor:"pointer", fontWeight:"700" });
+            const label = document.createElement("span"); label.className = "blocklyTreeLabel"; label.textContent = "◷ 履歴"; label.style.paddingLeft = "8px"; historyItem.appendChild(label);
+            const activateHistory = event => { event.preventDefault(); event.stopPropagation(); showBlockTypeFlyout(getRecentBlockTypes(), "最近使用したブロック"); };
+            historyItem.addEventListener("click", activateHistory); historyItem.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") activateHistory(event); });
+        }
+        if (item.parentNode === toolboxRoot && item.nextSibling !== historyItem) toolboxRoot.insertBefore(historyItem, item.nextSibling);
+        bindRecentBlockHistory();
         favoriteToolboxItemBound = true;
     }
+
+    // 実際にワークスペースへ配置されたブロックを履歴に記録
+    function bindRecentBlockHistory() {
+        const ws = getWorkspace();
+        if (!ws || ws.__selectionListRecentBound || typeof ws.addChangeListener !== "function") return;
+        ws.__selectionListRecentBound = true;
+        ws.addChangeListener(event => {
+            if (event?.type !== (_Blockly?.Events?.CREATE || "create")) return;
+            const ids = event.ids || (event.blockId ? [event.blockId] : []);
+            for (const id of ids) { const block = ws.getBlockById?.(id); if (block?.type) recordRecentBlock(block.type); }
+        });
+    }
+    document.addEventListener("contextmenu", event => {
+        const el = event.target?.closest?.(".blocklyFlyout g.blocklyDraggable, .blocklyFlyout .blocklyDraggable");
+        if (!el) return;
+        const id = el.getAttribute("data-id") || el.dataset?.id;
+        const flyout = getFavoriteFlyout();
+        const block = flyout?.getWorkspace?.()?.getBlockById?.(id) || flyout?.workspace_?.getBlockById?.(id);
+        const type = block?.type;
+        if (type && getFavoriteBlockTypes().includes(type)) {
+            event.preventDefault(); event.stopPropagation();
+            showFavoriteRemovalMenu(event, type);
+        }
+    }, true);
 
     let isScanning = false;
     function scan() {
