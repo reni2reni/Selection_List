@@ -3119,17 +3119,25 @@
     function getSectionVisible(key) {
         try { return localStorage.getItem(key) !== "false"; } catch (_) { return true; }
     }
+    function applyFavoritesHistoryVisibility() {
+        const favoritesVisible = getSectionVisible(FAVORITES_VISIBLE_KEY);
+        const historyVisible = getSectionVisible(HISTORY_VISIBLE_KEY);
+        document.querySelectorAll('[data-selection-list-plugin="favorite-toolbox-item"]').forEach(item => {
+            item.style.display = favoritesVisible ? "flex" : "none";
+        });
+        document.querySelectorAll('[data-selection-list-plugin="history-toolbox-item"]').forEach(item => {
+            item.style.display = historyVisible ? "flex" : "none";
+        });
+        return favoritesVisible || historyVisible;
+    }
+
     function addFavoritesHistoryToggles(submenu) {
         if (!submenu) return;
-        const specs = [
-            { key: FAVORITES_VISIBLE_KEY, attr: "toggle-favorites-visibility", ja: "お気に入り表示", en: "Favorites visibility" },
-            { key: HISTORY_VISIBLE_KEY, attr: "toggle-history-visibility", ja: "履歴表示", en: "History visibility" }
-        ];
-        for (const spec of specs) {
-            let item = submenu.querySelector(`[data-selection-list-plugin="${spec.attr}"]`);
-            if (item) continue;
+        const attr = "toggle-favorites-history-visibility";
+        let item = submenu.querySelector(`[data-selection-list-plugin="${attr}"]`);
+        if (!item) {
             item = document.createElement("div");
-            item.setAttribute("data-selection-list-plugin", spec.attr);
+            item.setAttribute("data-selection-list-plugin", attr);
             item.className = "selection-list-plugin-menu-item";
             Object.assign(item.style, {
                 padding: "5px 18px", whiteSpace: "nowrap", background: "rgb(22, 29, 30)",
@@ -3137,23 +3145,29 @@
                 borderTop: "1px solid #3a4648", display: "flex",
                 justifyContent: "space-between", alignItems: "center"
             });
-            const update = () => {
-                const ja = getPortalLanguage() === "ja";
-                item.textContent = `${ja ? spec.ja : spec.en}: ${getSectionVisible(spec.key) ? "ON" : "OFF"}`;
-                item.style.color = getSectionVisible(spec.key) ? "#61c3ff" : "#8e999b";
-            };
             item.addEventListener("mouseenter", () => item.style.background = "rgb(48, 60, 62)");
             item.addEventListener("mouseleave", () => item.style.background = "rgb(22, 29, 30)");
             item.addEventListener("click", event => {
-                event.preventDefault(); event.stopPropagation();
-                const next = !getSectionVisible(spec.key);
-                try { localStorage.setItem(spec.key, String(next)); } catch (_) {}
-                update();
-                installFavoriteToolboxItem();
+                event.preventDefault();
+                event.stopPropagation();
+                // One combined toggle: if either section is visible, hide both; otherwise show both.
+                const showNext = !(getSectionVisible(FAVORITES_VISIBLE_KEY) || getSectionVisible(HISTORY_VISIBLE_KEY));
+                try {
+                    localStorage.setItem(FAVORITES_VISIBLE_KEY, String(showNext));
+                    localStorage.setItem(HISTORY_VISIBLE_KEY, String(showNext));
+                } catch (_) {}
+                applyFavoritesHistoryVisibility(); // Apply immediately, without waiting for MutationObserver.
+                updateLabel();
             }, true);
-            update();
             submenu.appendChild(item);
         }
+        function updateLabel() {
+            const ja = getPortalLanguage() === "ja";
+            const bothVisible = getSectionVisible(FAVORITES_VISIBLE_KEY) && getSectionVisible(HISTORY_VISIBLE_KEY);
+            item.textContent = `${ja ? "お気に入り・履歴表示" : "Favorites & History"}: ${bothVisible ? "ON" : "OFF"}`;
+            item.style.color = bothVisible ? "#61c3ff" : "#8e999b";
+        }
+        updateLabel();
     }
 
     let isScanning = false;
@@ -3162,6 +3176,7 @@
         isScanning = true;
         try {
             installFavoriteToolboxItem();
+            applyFavoritesHistoryVisibility();
             registerFavoriteContextMenu();
             const block = getCurrentContextBlock();
             const eligible = isSelectionListBlock(block);
