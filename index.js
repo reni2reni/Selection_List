@@ -2918,7 +2918,38 @@
 
         try {
             flyout.show(Array.from(xml.children));
-            
+            if (window._favoriteHistoryOutsideClick) {
+                document.removeEventListener(
+                    'click',
+                    window._favoriteHistoryOutsideClick,
+                    true
+                );
+            }
+
+            window._favoriteHistoryOutsideClick = function (event) {
+                const flyout = document.querySelector('.blocklyFlyout');
+                const toolbox = document.querySelector('.blocklyToolboxDiv');
+
+                if (
+                    flyout &&
+                    !flyout.contains(event.target) &&
+                    (!toolbox || !toolbox.contains(event.target))
+                ) {
+                    const workspace = Blockly.getMainWorkspace();
+
+                    if (workspace && workspace.getFlyout()) {
+                        workspace.getFlyout().hide();
+                    }
+                }
+            };
+
+            setTimeout(() => {
+                document.addEventListener(
+                    'click',
+                    window._favoriteHistoryOutsideClick,
+                    true
+                );
+            }, 0);
         } catch (error) {
             console.warn("[Selection_List] favorite flyout could not be shown", error);
         }
@@ -3033,7 +3064,13 @@
         }
         // Keep the custom labels localized when the portal language changes.
         const favoriteLabel = item.querySelector(".blocklyTreeLabel");
-        if (favoriteLabel) favoriteLabel.textContent = getPortalLanguage() === "ja" ? "★ お気に入り" : "★ Favorites";
+        const favoriteText = getPortalLanguage() === "ja"
+            ? "★ お気に入り"
+            : "★ Favorites";
+
+        if (favoriteLabel && favoriteLabel.textContent !== favoriteText) {
+            favoriteLabel.textContent = favoriteText;
+        }
 
         // 履歴項目はお気に入りの直下に配置
         let historyItem = toolboxRoot.querySelector(':scope > [data-selection-list-plugin="history-toolbox-item"]');
@@ -3046,7 +3083,13 @@
             historyItem.addEventListener("click", activateHistory); historyItem.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") activateHistory(event); });
         }
         const historyLabel = historyItem.querySelector(".blocklyTreeLabel");
-        if (historyLabel) historyLabel.textContent = getPortalLanguage() === "ja" ? "◷ 履歴" : "◷ History";
+        const historyText = getPortalLanguage() === "ja"
+            ? "◷ 履歴"
+            : "◷ History";
+
+        if (historyLabel && historyLabel.textContent !== historyText) {
+            historyLabel.textContent = historyText;
+        }
         if (item.parentNode === toolboxRoot && item.nextSibling !== historyItem) toolboxRoot.insertBefore(historyItem, item.nextSibling);
         bindRecentBlockHistory();
         bindFavoriteFlyoutCloseReset();
