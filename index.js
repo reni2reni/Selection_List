@@ -12,6 +12,14 @@
         return lang.startsWith("ja") ? "ja" : "en";
     }
 
+    function isJapanesePluginActive() {
+        try {
+            return !!(window.__BF2042Portal_JapanesePlugin && window.__BF2042Portal_JapanesePlugin.isEnabled?.());
+        } catch (_) {
+            return false;
+        }
+    }
+
     function getWorkspace() {
         try { return _Blockly?.getMainWorkspace?.() || null; } catch (_) { return null; }
     }
@@ -248,10 +256,6 @@
         return { x: 300, y: 300 };
     }
 
-    function yieldToUI() {
-        return new Promise(resolve => setTimeout(resolve, 0));
-    }
-
     function createLoadingStatus(total) {
         const wrap = document.createElement("div");
         wrap.setAttribute("data-selection-list-plugin", "loading-status");
@@ -316,7 +320,6 @@
         const chunks = [];
         const total = names.length;
 
-        let processed = 0;
         for (let offset = 0, chunkIndex = 0; offset < names.length; offset += MAX_ITEMS_PER_ARRAY, chunkIndex++) {
             const chunk = names.slice(offset, offset + MAX_ITEMS_PER_ARRAY);
             const variable = names.length > MAX_ITEMS_PER_ARRAY
@@ -382,7 +385,6 @@
                 blocks.push(setBlock);
                 sourceIds.push(setId);
                 previousId = setId;
-                processed++;
             }
 
             const subroutineNumber = chunkIndex + 1;
@@ -663,301 +665,6 @@
                 : `Copied ${names.length} names as text arrays in ${count} collapsed subroutines.`);
     }
 
-  // ============================================================
-  // 翻訳マスターキャッシュ（API規制対策：localStorageに永続保存）
-  // ============================================================
-  const MASTER_TRANSLATION_CACHE_KEY = "selection_list_master_translation_cache_v1";
-  let masterTranslationCache = {};
-  try {
-    masterTranslationCache = JSON.parse(localStorage.getItem(MASTER_TRANSLATION_CACHE_KEY) || "{}");
-  } catch (_) {
-    masterTranslationCache = {};
-  }
-
-  let saveCacheTimer = null;
-  function scheduleSaveMasterCache() {
-    if (saveCacheTimer) clearTimeout(saveCacheTimer);
-    saveCacheTimer = setTimeout(() => {
-      try {
-        localStorage.setItem(MASTER_TRANSLATION_CACHE_KEY, JSON.stringify(masterTranslationCache));
-      } catch (_) { }
-    }, 500);
-  }
-
-  async function translateTextBatch(text) {
-    const key = String(text ?? "").trim();
-    if (!key) return "";
-
-    // 1. キャッシュが存在する場合はAPIを呼ばずに即座に返却（API消費ゼロ）
-    if (Object.prototype.hasOwnProperty.call(masterTranslationCache, key) && masterTranslationCache[key]) {
-      return masterTranslationCache[key];
-    }
-
-    // 2. キャッシュにない場合のみ翻訳APIへリクエスト
-    const endpoint = "https://translate.googleapis.com/translate_a/single";
-    const url = endpoint + "?client=gtx&sl=auto&tl=ja&dt=t&q=" + encodeURIComponent(key);
-    const response = await fetch(url, { method: "GET", credentials: "omit" });
-    if (!response.ok) throw new Error(`Translation HTTP ${response.status}`);
-    const data = await response.json();
-    if (!Array.isArray(data) || !Array.isArray(data[0])) throw new Error("Unexpected translation response");
-
-    const translated = data[0].map(part => Array.isArray(part) ? String(part[0] || "") : "").join("");
-
-    // 3. 翻訳成功時はマスターキャッシュに記録してローカル保存
-    if (translated) {
-      masterTranslationCache[key] = translated;
-      scheduleSaveMasterCache();
-    }
-    return translated;
-  }
-
-    function shouldKeepTranslationToken(token) {
-        return /^[A-Za-z]$/.test(String(token || '').trim());
-    }
-
-    const TRANSLATION_CORRECTIONS = {
-        "OnPlayerDeployed": "オンプレイヤーデプロイド",
-    };
-
-    function applyTranslationCorrection(original, translated) {
-        const source = normalize(original);
-        if (TRANSLATION_CORRECTIONS[source]) return TRANSLATION_CORRECTIONS[source];
-        return normalize(translated) || source;
-    }
-
-    async function getTranslatedBlockName(rawText) {
-        const key = normalize(rawText);
-        if (!key) return "";
-
-        // 1. キャッシュ（手動読み込みJSONなど）が存在すれば最優先でそれを返す
-        if (flyoutTranslationCache[key]) {
-            return flyoutTranslationCache[key];
-        }
-
-        // 2. キャッシュにない場合のみ自動翻訳を実行
-        const spaced = splitCamelCaseForTranslation(key);
-        let translated = applyTranslationCorrection(key, "");
-        if (!translated || translated === key) {
-            try {
-                translated = await translateTextBatch(spaced);
-                translated = applyTranslationCorrection(key, translated || spaced);
-            } catch (_) {
-                translated = spaced;
-            }
-        }
-
-        // 取得できたらキャッシュに蓄積
-        if (translated) {
-            flyoutTranslationCache[key] = translated;
-            try { localStorage.setItem(flyoutTranslationCacheKey, JSON.stringify(flyoutTranslationCache)); } catch (_) { }
-        }
-        return translated || key;
-    }
-
-    function splitCamelCaseForTranslation(value) {
-        const text = normalize(value);
-        if (!text) return "";
-        return text
-            .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
-            .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-            .replace(/([A-Za-z])([0-9]+)/g, "$1 $2")
-            .replace(/([0-9]+)([A-Za-z])/g, "$1 $2")
-            .replace(/_+/g, " ")
-            .replace(/\s+/g, " ")
-            .trim();
-    }
-
-    async function translateNames(names, progressBar = null) {
-        const unique = [...new Set(names.map(normalize).filter(Boolean))];
-        const translated = new Map();
-
-        const cacheKey = "selectionListTranslationCache_v2_parts";
-        let cache = {};
-        try { cache = JSON.parse(localStorage.getItem(cacheKey) || "{}"); } catch (_) { cache = {}; }
-
-        const partsForName = name => String(name).split("_");
-        const partKeys = new Set();
-        for (const name of unique) {
-            for (const part of partsForName(name)) {
-                if (part && !shouldKeepTranslationToken(part)) partKeys.add(part);
-            }
-        }
-
-        const pendingParts = [];
-        for (const part of partKeys) {
-            // 日本語で正しく保存されているものだけをスキップ (英語のまま残っているものは再翻訳へ)
-            if (typeof cache[part] === "string" && hasJapanese(cache[part])) {
-                continue;
-            }
-            pendingParts.push(part);
-        }
-
-        const progressTotal = pendingParts.length;
-        let progressDone = 0;
-        if (progressBar) {
-            updateLoadingStatus(progressBar, 0, progressTotal);
-            await yieldToUI();
-        }
-
-        const BATCH_CHARS = 1200;
-        const batches = [];
-        let batch = [];
-        let length = 0;
-        for (const part of pendingParts) {
-            const extra = part.length + 1;
-            if (batch.length && length + extra > BATCH_CHARS) {
-                batches.push(batch);
-                batch = [];
-                length = 0;
-            }
-            batch.push(part);
-            length += extra;
-        }
-        if (batch.length) batches.push(batch);
-
-        const translateOneBatch = async sourceBatch => {
-            try {
-                const source = sourceBatch.join("\n");
-                const result = await translateTextBatch(source);
-                const parts = result.split(/\r?\n/);
-
-                if (parts.length === sourceBatch.length) {
-                    sourceBatch.forEach((part, i) => {
-                        const value = String(parts[i] || part).trim();
-                        const corrected = applyTranslationCorrection(part, value);
-                        // ★日本語の時だけキャッシュに保存
-                        if (hasJapanese(corrected)) {
-                            cache[part] = corrected;
-                        }
-                    });
-                    progressDone += sourceBatch.length;
-                    if (progressBar) {
-                        updateLoadingStatus(progressBar, progressDone, progressTotal);
-                        await yieldToUI();
-                    }
-                    return;
-                }
-            } catch (_) { }
-
-            for (const part of sourceBatch) {
-                try {
-                    const value = String(await translateTextBatch(part)).trim();
-                    const corrected = applyTranslationCorrection(part, value);
-                    // ★日本語の時だけキャッシュに保存
-                    if (hasJapanese(corrected)) {
-                        cache[part] = corrected;
-                    }
-                } catch (_) {
-                    // 失敗時はキャッシュしない
-                }
-                progressDone++;
-                if (progressBar) {
-                    updateLoadingStatus(progressBar, progressDone, progressTotal);
-                    await yieldToUI();
-                }
-            }
-        };
-
-        for (let i = 0; i < batches.length; i += 3) {
-            await Promise.all(batches.slice(i, i + 3).map(translateOneBatch));
-        }
-
-        for (const name of unique) {
-            const translatedParts = partsForName(name).map(part => {
-                if (!part) return "";
-                if (shouldKeepTranslationToken(part)) return part;
-                return applyTranslationCorrection(part, typeof cache[part] === "string" && cache[part] ? cache[part] : part);
-            });
-            translated.set(name, translatedParts.join("_"));
-        }
-
-        try { localStorage.setItem(cacheKey, JSON.stringify(cache)); } catch (_) { }
-        return names.map(name => translated.get(normalize(name)) || normalize(name));
-    }
-
-    async function translateEventTypeNames(names, progressBar = null) {
-        const unique = [...new Set(names.map(normalize).filter(Boolean))];
-        const translated = new Map();
-        for (const name of unique) {
-            if (shouldKeepTranslationToken(name)) translated.set(name, name);
-        }
-        const cacheKey = "selectionListTranslationCache_v3_eventtype_camel";
-        let cache = {};
-        try { cache = JSON.parse(localStorage.getItem(cacheKey) || "{}"); } catch (_) { cache = {}; }
-
-        const pending = unique.filter(name => !shouldKeepTranslationToken(name) && (!cache[name] || !hasJapanese(cache[name])));
-        const total = pending.length;
-        let done = 0;
-        if (progressBar) {
-            updateLoadingStatus(progressBar, 0, total);
-            await yieldToUI();
-        }
-
-        const BATCH_CHARS = 1200;
-        const batches = [];
-        let batch = [];
-        let length = 0;
-        for (const name of pending) {
-            const source = splitCamelCaseForTranslation(name);
-            const extra = source.length + 1;
-            if (batch.length && length + extra > BATCH_CHARS) {
-                batches.push(batch);
-                batch = [];
-                length = 0;
-            }
-            batch.push({ name, source });
-            length += extra;
-        }
-        if (batch.length) batches.push(batch);
-
-        const translateBatch = async sourceBatch => {
-            try {
-                const source = sourceBatch.map(item => item.source).join("\n");
-                const result = await translateTextBatch(source);
-                const parts = result.split(/\r?\n/);
-                if (parts.length === sourceBatch.length) {
-                    sourceBatch.forEach((item, i) => {
-                        const value = String(parts[i] || "").trim();
-                        const corrected = applyTranslationCorrection(item.name, value);
-                        // ★日本語の時だけキャッシュに保存
-                        if (hasJapanese(corrected)) {
-                            cache[item.name] = corrected;
-                        }
-                    });
-                    done += sourceBatch.length;
-                    if (progressBar) {
-                        updateLoadingStatus(progressBar, done, total);
-                        await yieldToUI();
-                    }
-                    return;
-                }
-            } catch (_) { }
-
-            for (const item of sourceBatch) {
-                try {
-                    const value = String(await translateTextBatch(item.source)).trim();
-                    const corrected = applyTranslationCorrection(item.name, value);
-                    // ★日本語の時だけキャッシュに保存
-                    if (hasJapanese(corrected)) {
-                        cache[item.name] = corrected;
-                    }
-                } catch (_) {
-                    // 失敗時はキャッシュしない
-                }
-            }
-        };
-
-        for (let i = 0; i < batches.length; i += 3) {
-            await Promise.all(batches.slice(i, i + 3).map(translateBatch));
-        }
-
-        for (const name of unique) {
-            if (!translated.has(name)) translated.set(name, applyTranslationCorrection(name, cache[name] || name));
-        }
-        try { localStorage.setItem(cacheKey, JSON.stringify(cache)); } catch (_) { }
-        return names.map(name => translated.get(normalize(name)) || normalize(name));
-    }
-
     function extractSelectionItemPairs(block) {
         const result = [];
         const seen = new Set();
@@ -993,10 +700,13 @@
     }
 
     async function createJapaneseTextArray(block, names) {
+        if (!isJapanesePluginActive()) return null;
+        const jpPlugin = window.__BF2042Portal_JapanesePlugin;
         const progressBar = names.length > 256 ? createLoadingStatus(names.length) : null;
         if (progressBar) updateLoadingStatus(progressBar, 0, names.length);
-        const translated = await translateNames(names, progressBar);
+        const translated = await jpPlugin.translateNames(names, progressBar, updateLoadingStatus);
         if (progressBar) removeLoadingStatus(progressBar);
+
         const MAX_ITEMS_PER_ARRAY = 256;
         const pos = getBlockPosition(block);
         const x = Number(pos.x.toFixed(6));
@@ -1077,6 +787,7 @@
 
     async function createJapaneseArray(block, names) {
         const payload = await createJapaneseTextArray(block, names);
+        if (!payload) return;
         const count = Math.ceil(names.length / 256);
         await copyPayloadAndAlert(block, payload,
             getPortalLanguage() === "ja"
@@ -1131,6 +842,7 @@
 
     async function openJListSelect(block, pairs) {
         removeJListSelectPanel();
+        const jpActive = isJapanesePluginActive();
 
         const overlay = document.createElement("div");
         overlay.setAttribute("data-selection-list-plugin", "jlist-overlay");
@@ -1175,7 +887,7 @@
         const ruleMode = isRuleBlock(block);
         const ruleEventType = ruleMode ? getRuleEventType(block) : "";
         title.textContent = ruleMode
-            ? `List → JlistSelect  |  EVENTTYPE: ${ruleEventType} イベントタイプのみの検索`
+            ? `List → JlistSelect  |  EVENTTYPE: ${ruleEventType}`
             : (blockTypeName ? `List → JlistSelect  |  ${blockTypeName}` : "List → JlistSelect");
         title.title = ruleMode ? `EVENTTYPE: ${ruleEventType}` : (blockTypeName || "List → JlistSelect");
         Object.assign(title.style, { fontSize: "18px", fontWeight: "700", flex: "1", cursor: "move", userSelect: "none", minWidth: "0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" });
@@ -1187,6 +899,9 @@
             borderRadius: "4px", background: "#20282a", color: "#d7dddd", fontSize: "12px",
             cursor: "pointer", whiteSpace: "nowrap"
         });
+        if (!jpActive) {
+            displayButton.style.display = "none";
+        }
 
         const countLabel = document.createElement("div");
         Object.assign(countLabel.style, { fontSize: "12px", color: "#aab6b9", minWidth: "120px", textAlign: "right" });
@@ -1275,10 +990,11 @@
         const rows = [];
         const selectedOriginals = new Set();
         let lastSelectedOriginal = null;
-        let displayMode = "jaen";
+        let displayMode = jpActive ? "jaen" : "en";
+
         const sortedPairs = () => {
             const copy = [...pairs];
-            if (displayMode === "enja") {
+            if (!jpActive || displayMode === "enja" || displayMode === "en") {
                 return copy.sort((a, b) => normalize(a.original || a.display).localeCompare(normalize(b.original || b.display), "en", { numeric: true, sensitivity: "base" }));
             }
             return copy.sort((a, b) => {
@@ -1296,38 +1012,54 @@
         };
         const modePlaceholders = {
             jaen: ruleMode ? `EVENTTYPE: ${ruleEventType} のみ検索…` : "Search Japanese / original name…",
-            enja: ruleMode ? `Search only EVENTTYPE: ${ruleEventType}…` : "Search original name / Japanese…"
+            enja: ruleMode ? `Search only EVENTTYPE: ${ruleEventType}…` : "Search original name / Japanese…",
+            en: ruleMode ? `Search EVENTTYPE: ${ruleEventType}…` : "Search item name…"
         };
+
         const updateDisplay = () => {
-            displayButton.textContent = modeLabels[displayMode];
-            search.placeholder = modePlaceholders[displayMode];
-            const q = normalize(search.value).toLocaleLowerCase(displayMode === "enja" ? "en" : "ja");
+            if (jpActive) {
+                displayButton.textContent = modeLabels[displayMode];
+                search.placeholder = modePlaceholders[displayMode];
+            } else {
+                search.placeholder = modePlaceholders["en"];
+            }
+
+            const q = normalize(search.value).toLowerCase();
             const sorted = sortedPairs();
             rows.forEach(row => row.el.remove());
             rows.length = 0;
+
             for (const pair of sorted) {
                 const original = normalize(pair.original || pair.display);
                 const japanese = normalize(pair.japanese || original);
                 const row = document.createElement("div");
                 Object.assign(row.style, { display: "flex", alignItems: "center", minHeight: "42px", padding: "7px 16px", boxSizing: "border-box", borderBottom: "1px solid #273032", cursor: "pointer", gap: "14px", userSelect: "none" });
-                const left = document.createElement("div");
-                const right = document.createElement("div");
-                if (displayMode === "jaen") {
-                    left.textContent = japanese;
-                    right.textContent = original;
+
+                if (!jpActive) {
+                    const single = document.createElement("div");
+                    single.textContent = original;
+                    Object.assign(single.style, { flex: "1 1 100%", minWidth: "0", fontSize: "15px", fontWeight: "600", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" });
+                    row.appendChild(single);
                 } else {
-                    left.textContent = original;
-                    right.textContent = japanese;
+                    const left = document.createElement("div");
+                    const right = document.createElement("div");
+                    if (displayMode === "jaen") {
+                        left.textContent = japanese;
+                        right.textContent = original;
+                    } else {
+                        left.textContent = original;
+                        right.textContent = japanese;
+                    }
+                    Object.assign(left.style, { flex: "1 1 50%", minWidth: "0", fontSize: "15px", fontWeight: "600", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" });
+                    Object.assign(right.style, { flex: "1 1 50%", minWidth: "0", fontSize: "15px", color: "#d1d9da", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" });
+                    row.appendChild(left);
+                    row.appendChild(right);
                 }
-                Object.assign(left.style, { flex: "1 1 50%", minWidth: "0", fontSize: "15px", fontWeight: "600", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" });
-                Object.assign(right.style, { flex: "1 1 50%", minWidth: "0", fontSize: "15px", color: "#d1d9da", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" });
-                row.appendChild(left); row.appendChild(right);
+
                 const refreshRowSelection = () => {
                     const selected = selectedOriginals.has(original);
                     row.style.background = selected ? "#2459a6" : "transparent";
                     row.style.color = selected ? "#ffffff" : "";
-                    left.style.color = selected ? "#ffffff" : "";
-                    right.style.color = selected ? "#eaf2ff" : "#d1d9da";
                     row.setAttribute("aria-selected", selected ? "true" : "false");
                 };
                 row._selectionOriginal = original;
@@ -1378,10 +1110,11 @@
                     }
                 });
                 list.appendChild(row);
-                const searchText = `${japanese} ${original}`;
-                rows.push({ el: row, original, searchText: searchText.toLocaleLowerCase(displayMode === "enja" ? "en" : "ja"), _refreshSelection: refreshRowSelection });
+                const searchText = jpActive ? `${japanese} ${original}` : original;
+                rows.push({ el: row, original, searchText: searchText.toLowerCase(), _refreshSelection: refreshRowSelection });
                 refreshRowSelection();
             }
+
             let visible = 0;
             for (const row of rows) {
                 const hit = !q || row.searchText.includes(q);
@@ -1421,13 +1154,15 @@
             }
         });
 
-        displayButton.addEventListener("mouseenter", () => displayButton.style.background = "#303b3d");
-        displayButton.addEventListener("mouseleave", () => displayButton.style.background = "#20282a");
-        displayButton.addEventListener("click", () => {
-            displayMode = displayMode === "jaen" ? "enja" : "jaen";
-            updateDisplay();
-            search.focus();
-        });
+        if (jpActive) {
+            displayButton.addEventListener("mouseenter", () => displayButton.style.background = "#303b3d");
+            displayButton.addEventListener("mouseleave", () => displayButton.style.background = "#20282a");
+            displayButton.addEventListener("click", () => {
+                displayMode = displayMode === "jaen" ? "enja" : "jaen";
+                updateDisplay();
+                search.focus();
+            });
+        }
         search.addEventListener("input", updateDisplay);
 
         const resizeStrip = document.createElement("div");
@@ -1495,32 +1230,41 @@
             alert(getPortalLanguage() === "ja" ? "対象ブロックの候補を取得できませんでした。" : "No list options could be found on this block.");
             return;
         }
+
         const originals = pairs.map(p => normalize(p.original || p.display)).filter(Boolean);
-        const progressBar = !ruleMode && originals.length > 256 ? createLoadingStatus(originals.length) : null;
-        if (progressBar) updateLoadingStatus(progressBar, 0, originals.length);
-        try {
-            const translated = ruleMode
-                ? await translateEventTypeNames(originals, progressBar)
-                : await translateNames(originals, progressBar);
-            if (progressBar) removeLoadingStatus(progressBar);
-            const translatedMap = new Map();
-            originals.forEach((name, i) => translatedMap.set(normalize(name), translated[i] || name));
-            const translatedPairs = pairs.map(pair => ({
-                original: normalize(pair.original || pair.display),
-                japanese: translatedMap.get(normalize(pair.original || pair.display)) || normalize(pair.original || pair.display)
-            }));
-            await openJListSelect(block, translatedPairs);
-        } catch (error) {
-            if (progressBar) removeLoadingStatus(progressBar);
-            console.error("Selection_List JlistSelect failed", error);
-            alert(getPortalLanguage() === "ja" ? "JListSelectの表示に失敗しました。" : "Failed to open JListSelect.");
+
+        if (isJapanesePluginActive()) {
+            const jpPlugin = window.__BF2042Portal_JapanesePlugin;
+            const progressBar = !ruleMode && originals.length > 256 ? createLoadingStatus(originals.length) : null;
+            if (progressBar) updateLoadingStatus(progressBar, 0, originals.length);
+            try {
+                const translated = ruleMode
+                    ? await jpPlugin.translateEventTypeNames(originals, progressBar, updateLoadingStatus)
+                    : await jpPlugin.translateNames(originals, progressBar, updateLoadingStatus);
+                if (progressBar) removeLoadingStatus(progressBar);
+                const translatedMap = new Map();
+                originals.forEach((name, i) => translatedMap.set(normalize(name), translated[i] || name));
+                const translatedPairs = pairs.map(pair => ({
+                    original: normalize(pair.original || pair.display),
+                    japanese: translatedMap.get(normalize(pair.original || pair.display)) || normalize(pair.original || pair.display)
+                }));
+                await openJListSelect(block, translatedPairs);
+            } catch (error) {
+                if (progressBar) removeLoadingStatus(progressBar);
+                console.error("Selection_List JlistSelect failed", error);
+                await openJListSelect(block, pairs.map(p => ({ original: normalize(p.original || p.display), japanese: "" })));
+            }
+        } else {
+            await openJListSelect(block, pairs.map(p => ({ original: normalize(p.original || p.display), japanese: "" })));
         }
     }
 
     async function exportTranslatedTextFile(block, names) {
+        if (!isJapanesePluginActive()) return;
+        const jpPlugin = window.__BF2042Portal_JapanesePlugin;
         const progressBar = names.length > 256 ? createLoadingStatus(names.length) : null;
         if (progressBar) updateLoadingStatus(progressBar, 0, names.length);
-        const translated = await translateNames(names, progressBar);
+        const translated = await jpPlugin.translateNames(names, progressBar, updateLoadingStatus);
         if (progressBar) removeLoadingStatus(progressBar);
         const group = getFieldText(block, "VALUE-0") || getBaseVariableName(block);
         const filename = `${group}_list_EJ.txt`;
@@ -1632,12 +1376,12 @@
             display = display || value;
             if (!value || seen.has(value)) continue;
             seen.add(value);
-            result.push({ original: value, display, japanese: value });
+            result.push({ original: value, display });
         }
 
         if (!result.length) {
             const eventType = getRuleEventType(block);
-            if (eventType) result.push({ original: eventType, display: eventType, japanese: eventType });
+            if (eventType) result.push({ original: eventType, display: eventType });
         }
         return result;
     }
@@ -1693,9 +1437,6 @@
         return false;
     }
 
-    // ============================================================
-    // Selection List ▶ サブメニューのホバー開閉制御
-    // ============================================================
     let floatingMenuCloseTimer = null;
 
     function scheduleCloseFloatingMenu() {
@@ -1705,8 +1446,6 @@
             const floatingPanel = document.querySelector('[data-selection-list-plugin="floating-root"]');
             const isHoverRoot = rootItem && rootItem.matches(":hover");
             const isHoverFloating = floatingPanel && floatingPanel.matches(":hover");
-
-            // 本項目および展開サブメニューのどちらにもカーソルが無い場合は閉じる
             if (!isHoverRoot && !isHoverFloating) {
                 removeFloatingMenu();
             }
@@ -1728,14 +1467,11 @@
         }
     }
 
-    function createFloatingMenu(anchor, clientX, clientY) {
+    function createFloatingMenu(anchor) {
         removeFloatingMenu();
 
         const panel = document.createElement("div");
         panel.setAttribute("data-selection-list-plugin", "floating-root");
-        const px = Number.isFinite(clientX) ? clientX : 0;
-        const py = Number.isFinite(clientY) ? clientY : 0;
-
         const rect = anchor.getBoundingClientRect();
 
         Object.assign(panel.style, {
@@ -1749,454 +1485,96 @@
         });
 
         const ruleMode = isRuleBlock(getCurrentContextBlock());
-        const entries = ruleMode ? [
-            menuItem("List → JlistSelect", async (event) => {
-                try {
-                    event?.preventDefault?.();
-                    event?.stopPropagation?.();
-                    event?.stopImmediatePropagation?.();
-                } catch (_) { }
-                setTimeout(() => {
-                    openJListSelectFromContext().catch(error => console.error("Selection_List JlistSelect failed", error));
-                }, 0);
-            }),
-            menuItem("ListName → File", () => {
-                const data = getContextListData();
-                if (!data) return;
-                exportTextFile(data.block, data.names);
-                removeFloatingMenu();
-            }),
-            menuItem("ListName → File (E,J)", async () => {
-                const data = getContextListData();
-                if (!data) return;
-                await exportTranslatedTextFile(data.block, data.names);
-                removeFloatingMenu();
-            })
-        ] : [
-            menuItem("List → JlistSelect", async (event) => {
-                try {
-                    event?.preventDefault?.();
-                    event?.stopPropagation?.();
-                    event?.stopImmediatePropagation?.();
-                } catch (_) { }
-                setTimeout(() => {
-                    openJListSelectFromContext().catch(error => console.error("Selection_List JlistSelect failed", error));
-                }, 0);
-            }),
-            menuItem("List → array", async () => {
+        const jpActive = isJapanesePluginActive();
+        const entries = [];
+
+        entries.push(menuItem("List → JlistSelect", async (event) => {
+            try {
+                event?.preventDefault?.();
+                event?.stopPropagation?.();
+                event?.stopImmediatePropagation?.();
+            } catch (_) { }
+            setTimeout(() => {
+                openJListSelectFromContext().catch(error => console.error("Selection_List JlistSelect failed", error));
+            }, 0);
+        }));
+
+        if (!ruleMode) {
+            entries.push(menuItem("List → array", async () => {
                 const data = getNamesOrAlert();
                 if (!data) return;
                 await createParallel(data.block, data.names);
                 removeFloatingMenu();
-            }),
-            menuItem("ListName → array", async () => {
+            }));
+
+            entries.push(menuItem("ListName → array", async () => {
                 const data = getNamesOrAlert();
                 if (!data) return;
                 await createTextArray(data.block, data.names);
                 removeFloatingMenu();
-            }),
-            menuItem("ListName → array (J)", async () => {
-                const data = getNamesOrAlert();
-                if (!data) return;
-                await createJapaneseArray(data.block, data.names);
-                removeFloatingMenu();
-            }),
-            menuItem("ListName → File", () => {
+            }));
+
+            // Japanese プラグイン有効時のみ表示
+            if (jpActive) {
+                entries.push(menuItem("ListName → array (J)", async () => {
+                    const data = getNamesOrAlert();
+                    if (!data) return;
+                    await createJapaneseArray(data.block, data.names);
+                    removeFloatingMenu();
+                }));
+            }
+
+            entries.push(menuItem("ListName → File", () => {
                 const data = getNamesOrAlert();
                 if (!data) return;
                 exportTextFile(data.block, data.names);
                 removeFloatingMenu();
-            }),
-            menuItem("ListName → File (E,J)", async () => {
-                const data = getNamesOrAlert();
+            }));
+
+            // Japanese プラグイン有効時のみ表示
+            if (jpActive) {
+                entries.push(menuItem("ListName → File (E,J)", async () => {
+                    const data = getNamesOrAlert();
+                    if (!data) return;
+                    await exportTranslatedTextFile(data.block, data.names);
+                    removeFloatingMenu();
+                }));
+            }
+        } else {
+            // Ruleブロックの場合
+            entries.push(menuItem("ListName → File", () => {
+                const data = getContextListData();
                 if (!data) return;
-                await exportTranslatedTextFile(data.block, data.names);
+                exportTextFile(data.block, data.names);
                 removeFloatingMenu();
-            })
-        ];
+            }));
+
+            if (jpActive) {
+                entries.push(menuItem("ListName → File (E,J)", async () => {
+                    const data = getContextListData();
+                    if (!data) return;
+                    await exportTranslatedTextFile(data.block, data.names);
+                    removeFloatingMenu();
+                }));
+            }
+        }
+
         entries.forEach(entry => panel.appendChild(entry));
 
-        // 展開メニュー上にカーソルがある間は維持し、外れたら閉じる
         panel.addEventListener("mouseenter", cancelCloseFloatingMenu);
         panel.addEventListener("mouseleave", scheduleCloseFloatingMenu);
 
         anchor.appendChild(panel);
 
-        // 画面右端・下端からはみ出さないように位置を補正
         const panelRect = panel.getBoundingClientRect();
-
         if (panelRect.right > window.innerWidth) {
             panel.style.left = `${Math.max(0, window.innerWidth - panelRect.width - 8)}px`;
         }
-
         if (panelRect.bottom > window.innerHeight) {
             panel.style.top = `${Math.max(0, window.innerHeight - panelRect.height - 8)}px`;
         }
 
         return panel;
-    }
-
-    // 日本語化機能のON/OFF状態（初期値はON、localStorageで状態保持）
-    let translationEnabled = localStorage.getItem("selection_list_translation_enabled") !== "false";
-
-    function addTranslationToggleMenu(submenu) {
-        if (!submenu || submenu.querySelector('[data-selection-list-plugin="toggle-translation"]')) return;
-
-        const item = document.createElement("div");
-        item.setAttribute("data-selection-list-plugin", "toggle-translation");
-        item.className = "selection-list-plugin-menu-item";
-        Object.assign(item.style, {
-            padding: "5px 18px",
-            whiteSpace: "nowrap",
-            background: "rgb(22, 29, 30)",
-            color: translationEnabled ? "#61c3ff" : "#8e999b",
-            cursor: "pointer",
-            fontSize: "15px",
-            lineHeight: "1.3",
-            borderTop: "1px solid #3a4648",
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center"
-        });
-        item.textContent = translationEnabled ? "日本語化: ON (無効化)" : "日本語化: OFF (有効化)";
-
-        item.addEventListener("mouseenter", () => item.style.background = "rgb(48, 60, 62)");
-        item.addEventListener("mouseleave", () => item.style.background = "rgb(22, 29, 30)");
-        item.addEventListener("click", event => {
-            event.preventDefault();
-            event.stopPropagation();
-            translationEnabled = !translationEnabled;
-            localStorage.setItem("selection_list_translation_enabled", String(translationEnabled));
-            item.textContent = translationEnabled ? "日本語化: ON (無効化)" : "日本語化: OFF (有効化)";
-            item.style.color = translationEnabled ? "#61c3ff" : "#8e999b";
-            if (!translationEnabled) hideFlyoutTooltip();
-        }, true);
-
-        submenu.appendChild(item);
-    }
-
-    // ============================================================
-    // 日本語キャッシュの保存 (エクスポート) & 読込 (インポート)
-    // ============================================================
-    function exportBlockCacheJson() {
-        const sorted = {};
-        Object.keys(flyoutTranslationCache).sort().forEach(k => {
-            sorted[k] = flyoutTranslationCache[k];
-        });
-        const jsonText = JSON.stringify(sorted, null, 2);
-        const blob = new Blob([jsonText], { type: "application/json;charset=utf-8" });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = "block_translation_cache.json";
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
-        alert(`ブロック名の日本語キャッシュ（${Object.keys(sorted).length}件）を保存しました。`);
-    }
-
-    function importBlockCacheJson() {
-        const input = document.createElement("input");
-        input.type = "file";
-        input.accept = ".json,application/json";
-        input.style.display = "none";
-        input.onchange = e => {
-            const file = e.target.files?.[0];
-            if (!file) return;
-            const reader = new FileReader();
-            reader.onload = ev => {
-                try {
-                    const data = JSON.parse(ev.target.result);
-                    if (!data || typeof data !== "object") throw new Error();
-                    let count = 0;
-                    for (const [k, v] of Object.entries(data)) {
-                        if (typeof v === "string" && v.trim()) {
-                            flyoutTranslationCache[normalize(k)] = v.trim();
-                            count++;
-                        }
-                    }
-                    localStorage.setItem(flyoutTranslationCacheKey, JSON.stringify(flyoutTranslationCache));
-                    alert(`日本語キャッシュ（${count}件）を正常に読み込みました！即座に反映されます。`);
-                } catch (_) {
-                    alert("JSONファイルの形式が正しくありません。");
-                }
-            };
-            reader.readAsText(file, "UTF-8");
-            input.remove();
-        };
-        document.body.appendChild(input);
-        input.click();
-    }
-
-    // ============================================================
-    // 全カテゴリ・全ブロック完全抽出 (外枠アクション＆値ブロック両対応)
-    // ============================================================
-    function extractToolboxCategoriesAndBlocks() {
-        const ws = getWorkspace();
-        const Blockly = _Blockly || window.Blockly;
-        const categories = {};
-        const recordedBlocks = new Set();
-
-        function addBlockToCategory(catName, type) {
-            const cleanType = normalize(type);
-            if (!cleanType || cleanType === "null" || cleanType === "undefined") return;
-            if (!categories[catName]) {
-                categories[catName] = { count: 0, blocks: [] };
-            }
-            if (!categories[catName].blocks.includes(cleanType)) {
-                categories[catName].blocks.push(cleanType);
-                categories[catName].count = categories[catName].blocks.length;
-                recordedBlocks.add(cleanType);
-            }
-        }
-
-        // オブジェクト/XML/文字列からtype名を徹底抽出
-        function parseAnyBlockType(item) {
-            if (!item) return null;
-            if (typeof item === "string") {
-                const m = item.match(/type=["']([^"']+)["']/i);
-                return m ? m[1] : null;
-            }
-            if (item.getAttribute && item.getAttribute("type")) return item.getAttribute("type");
-            if (typeof item.type === "string" && item.type) return item.type;
-            if (item.blockxml) {
-                if (typeof item.blockxml === "string") {
-                    const m = item.blockxml.match(/type=["']([^"']+)["']/i);
-                    if (m) return m[1];
-                } else if (item.blockxml.getAttribute) {
-                    return item.blockxml.getAttribute("type");
-                }
-            }
-            return null;
-        }
-
-        // -------------------------------------------------------------
-        // アプローチ1: Blockly Toolboxインスタンスから直接展開 (最も確実)
-        // -------------------------------------------------------------
-        try {
-            const toolbox = ws?.getToolbox?.();
-            if (toolbox) {
-                // すべてのToolboxアイテムを取得
-                const items = toolbox.getToolboxItems?.() || toolbox.contents_ || [];
-
-                function inspectToolboxItem(item, parentPath = "") {
-                    if (!item) return;
-                    const name = item.getName?.() || item.name_ || item.toolboxItemDef_?.name || item.id_;
-                    if (!name || name === "sep") return;
-
-                    const currentPath = parentPath ? `${parentPath} > ${name}` : name;
-
-                    // A. 公式の getContents() メソッド（画面に実際に出る全ブロック定義）
-                    let contents = [];
-                    try {
-                        if (typeof item.getContents === "function") {
-                            contents = item.getContents() || [];
-                        }
-                    } catch (_) { }
-
-                    // B. 定義オブジェクトの contents
-                    const defContents = item.toolboxItemDef_?.contents || item.def_?.contents;
-                    if (Array.isArray(defContents)) {
-                        contents = contents.concat(defContents);
-                    }
-
-                    // ブロックの収集
-                    if (Array.isArray(contents) && contents.length > 0) {
-                        contents.forEach(c => {
-                            if (!c) return;
-                            // サブカテゴリなら再帰
-                            if (c.kind === "category" || (c.contents && !c.type && !c.blockxml)) {
-                                inspectToolboxItem(c, currentPath);
-                            } else {
-                                const t = parseAnyBlockType(c);
-                                if (t) addBlockToCategory(currentPath, t);
-                            }
-                        });
-                    }
-
-                    // C. 子カテゴリ（サブツリー）を再帰探索
-                    const subItems = item.getChildToolboxItems?.() || item.children_ || [];
-                    if (Array.isArray(subItems)) {
-                        subItems.forEach(sub => inspectToolboxItem(sub, currentPath));
-                    }
-                }
-
-                items.forEach(it => inspectToolboxItem(it, ""));
-            }
-        } catch (_) { }
-
-        // -------------------------------------------------------------
-        // アプローチ2: XML / JSON languageTree の深層走査 (二重チェック)
-        // -------------------------------------------------------------
-        try {
-            const tree = ws?.options?.languageTree;
-            if (tree) {
-                if (typeof tree === "string" || tree.nodeType === 1) {
-                    const doc = typeof tree === "string" ? new DOMParser().parseFromString(tree, "text/xml") : tree;
-                    // すべてのカテゴリ要素を網羅
-                    doc.querySelectorAll("category").forEach(cat => {
-                        let catPath = cat.getAttribute("name") || "Unknown";
-                        let p = cat.parentElement;
-                        while (p && p.tagName?.toLowerCase() === "category") {
-                            catPath = `${p.getAttribute("name") || "Category"} > ${catPath}`;
-                            p = p.parentElement;
-                        }
-
-                        // このカテゴリに属する全ブロック（外枠・内枠問わず）
-                        cat.querySelectorAll("block").forEach(b => {
-                            const t = b.getAttribute("type");
-                            if (t) addBlockToCategory(catPath, t);
-                        });
-                    });
-                } else if (Array.isArray(tree.contents)) {
-                    function walkTreeJson(node, pPath = "") {
-                        if (!node) return;
-                        const cName = node.name || node.kind;
-                        const cur = pPath ? `${pPath} > ${cName}` : cName;
-                        if (Array.isArray(node.contents)) {
-                            node.contents.forEach(child => {
-                                if (child.kind === "category" || (child.contents && !child.type)) {
-                                    walkTreeJson(child, cur);
-                                } else {
-                                    const t = parseAnyBlockType(child);
-                                    if (t) addBlockToCategory(cur, t);
-                                }
-                            });
-                        }
-                    }
-                    tree.contents.forEach(n => walkTreeJson(n, ""));
-                }
-            }
-        } catch (_) { }
-
-        // -------------------------------------------------------------
-        // アプローチ3: Portal 全ブロックレジストリとの突合 (絶対漏れ防止)
-        // -------------------------------------------------------------
-        try {
-            if (Blockly?.Blocks) {
-                const allRegisteredTypes = Object.keys(Blockly.Blocks);
-                const missingBlocks = allRegisteredTypes.filter(t => !recordedBlocks.has(t));
-
-                // 万が一Toolboxの特定カテゴリで拾えなかったブロックが存在する場合、
-                // 取りこぼしなく「Uncategorized (Other Blocks)」として完全回収
-                if (missingBlocks.length > 0) {
-                    missingBlocks.forEach(t => {
-                        // システム用の一時ブロック等を除外
-                        if (/^(placeholder|dummy|temp)/i.test(t)) return;
-                        addBlockToCategory("Uncategorized Blocks", t);
-                    });
-                }
-            }
-        } catch (_) { }
-
-        return categories;
-    }
-
-    function exportToolboxListJson() {
-        const categories = extractToolboxCategoriesAndBlocks();
-        let totalBlocks = 0;
-        Object.values(categories).forEach(c => totalBlocks += (c.count || 0));
-
-        const output = {
-            _description: "Battlefield 2042 Portal Toolbox Block List",
-            exportedAt: new Date().toISOString(),
-            totalCategories: Object.keys(categories).length,
-            totalBlocks: totalBlocks,
-            categories: categories
-        };
-
-        const jsonText = JSON.stringify(output, null, 2);
-        const blob = new Blob([jsonText], { type: "application/json;charset=utf-8" });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-        a.download = `portal_blocks_list_${dateStr}.json`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
-        alert(`全${output.totalCategories}カテゴリ（合計${totalBlocks}個のブロック）の一覧をJSONに出力しました！`);
-    }
-
-    function removeCacheSubmenu() {
-        document.querySelectorAll('[data-selection-list-plugin="cache-submenu"]').forEach(el => el.remove());
-    }
-
-    function addCacheManagementMenu(submenu) {
-        if (!submenu || submenu.querySelector('[data-selection-list-plugin="cache-root"]')) return;
-
-        const item = document.createElement("div");
-        item.setAttribute("data-selection-list-plugin", "cache-root");
-        item.className = "selection-list-plugin-menu-item";
-        Object.assign(item.style, {
-            padding: "5px 18px",
-            whiteSpace: "nowrap",
-            background: "rgb(22, 29, 30)",
-            color: "#ffffff",
-            cursor: "pointer",
-            fontSize: "15px",
-            lineHeight: "1.3",
-            borderTop: "1px solid #3a4648",
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center"
-        });
-        item.textContent = "日本語キャッシュ ▶";
-
-        item.addEventListener("mouseenter", event => {
-            item.style.background = "rgb(48, 60, 62)";
-
-            // 既存のサブメニューがあれば削除して、位置を再計算する
-            removeCacheSubmenu();
-
-            // サブメニュー（保存・読込）
-            const sub = document.createElement("div");
-            sub.setAttribute("data-selection-list-plugin", "cache-submenu");
-
-            const rect = item.getBoundingClientRect();
-
-            Object.assign(sub.style, {
-                position: "fixed",
-                left: `${rect.left + rect.width / 2}px`,
-                top: `${rect.bottom}px`,
-                transform: "translateX(0)",
-                minWidth: "160px",
-                background: "rgb(22, 29, 30)",
-                color: "#fff",
-                border: "1px solid #3a4648",
-                boxShadow: "0 3px 14px rgba(0,0,0,.45)",
-                zIndex: "2147483647",
-                display: "flex",
-                flexDirection: "column"
-            });
-
-            sub.appendChild(menuItem("キャッシュを保存 (.json)", () => {
-                exportBlockCacheJson();
-                removeCacheSubmenu();
-            }));
-            sub.appendChild(menuItem("キャッシュを読込 (.json)", () => {
-                importBlockCacheJson();
-                removeCacheSubmenu();
-            }));
-            // ★ここに追加
-            sub.appendChild(menuItem("ブロック一覧 (.json)", () => {
-                exportToolboxListJson();
-                removeCacheSubmenu();
-            }));
-
-            item.appendChild(sub);
-        });
-
-        item.addEventListener("mouseleave", () => {
-            item.style.background = "rgb(22, 29, 30)";
-            setTimeout(() => {
-                if (!item.matches(":hover")) removeCacheSubmenu();
-            }, 200);
-        });
-
-        submenu.appendChild(item);
     }
 
     function addSelectionListMenu(submenu) {
@@ -2222,577 +1600,21 @@
         label.textContent = "Selection List ▶     ";
         item.appendChild(label);
 
-        item.addEventListener("mouseenter", event => {
+        item.addEventListener("mouseenter", () => {
             item.style.background = "rgb(48, 60, 62)";
             cancelCloseFloatingMenu();
-            createFloatingMenu(item, event.clientX || lastContextMenuX, event.clientY || lastContextMenuY);
+            createFloatingMenu(item);
         });
         item.addEventListener("mouseleave", () => {
             item.style.background = "rgb(22, 29, 30)";
-            // 本項目からカーソルが離れたら閉じる判定を開始
             scheduleCloseFloatingMenu();
         });
         submenu.appendChild(item);
     }
 
-    // ============================================================
-    // Native Help Japanese translation
-    // - ブロックの絵（SVG/CODE/PRE等）の中身はそのまま保持
-    // - それ以外のタイトル、説明文、引数解説等のテキストをすべて日本語化
-    // ============================================================
-    let helpTranslationRunning = false;
-    let helpTranslationTimer = null;
-
-    function isVisibleHelpElement(el) {
-        if (!el || !el.isConnected) return false;
-        const cs = getComputedStyle(el);
-        const r = el.getBoundingClientRect();
-        return cs.display !== "none" && cs.visibility !== "hidden" && r.width > 120 && r.height > 80;
-    }
-
-    function findNativeHelpDialogForTranslation() {
-        const candidates = [...document.querySelectorAll('[role="dialog"], [aria-modal="true"], [class*="help" i], [class*="Help"], .modal, .dialog')]
-            .filter(isVisibleHelpElement);
-        if (!candidates.length) return null;
-        const scored = candidates.map(el => {
-            const text = normalize(el.innerText || el.textContent || "");
-            let score = 0;
-            if (/\bHelp\b|ヘルプ/i.test(text)) score += 10;
-            if (/description|usage|example|input|output|説明|使用例|例/i.test(text)) score += 6;
-            if (el.matches('[role="dialog"], [aria-modal="true"]')) score += 4;
-            if (el.querySelector('svg')) score += 2;
-            const r = el.getBoundingClientRect();
-            return { el, score, area: r.width * r.height };
-        });
-        scored.sort((a, b) => b.score - a.score || b.area - a.area);
-        return (scored[0] && scored[0].score >= 3) ? scored[0].el : null;
-    }
-
-    function collectHelpTextNodes(root) {
-        const nodes = [];
-        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-        let node;
-        while ((node = walker.nextNode())) {
-            const parent = node.parentElement;
-            if (!parent) continue;
-
-            // スクリプト、スタイル、入力フォーム要素は除外
-            if (/^(SCRIPT|STYLE|TEXTAREA|INPUT|BUTTON|OPTION)$/i.test(parent.tagName)) continue;
-            if (parent.closest('textarea, input, button')) continue;
-
-            // 重要: 「ブロックの絵（SVG描画）」および「プログラムコード」内部の文字だけを除外
-            // (ダイアログ全体のラッパーではなく、絵の要素そのものだけを除外)
-            if (parent.closest('svg, code, pre')) continue;
-
-            const text = normalize(node.nodeValue);
-            if (!text || /^[\d\s\-_/.:,()[\]{}]+$/.test(text)) continue;
-            nodes.push(node);
-        }
-        return nodes;
-    }
-
-    async function translateNativeHelpDialog(dialog) {
-        if (!dialog || helpTranslationRunning) return;
-        helpTranslationRunning = true;
-        try {
-            const nodes = collectHelpTextNodes(dialog);
-            const cacheKey = "selectionListNativeHelpTranslationCache_v3";
-            let cache = {};
-            try { cache = JSON.parse(localStorage.getItem(cacheKey) || "{}"); } catch (_) { cache = {}; }
-
-            for (let i = 0; i < nodes.length; i += 10) {
-                const batch = nodes.slice(i, i + 10);
-                await Promise.all(batch.map(async node => {
-                    const source = normalize(node.nodeValue);
-                    if (!source) return;
-                    let translated = applyTranslationCorrection(source, cache[source] || "");
-                    if (!translated || translated === source) {
-                        try {
-                            const raw = await translateTextBatch(source);
-                            translated = applyTranslationCorrection(source, raw);
-                            cache[source] = translated || source;
-                        } catch (_) {
-                            translated = source;
-                        }
-                    }
-                    if (translated && translated !== source && node.isConnected) {
-                        node.nodeValue = translated;
-                    }
-                }));
-            }
-            try { localStorage.setItem(cacheKey, JSON.stringify(cache)); } catch (_) { }
-        } finally {
-            helpTranslationRunning = false;
-        }
-    }
-
-    function scheduleNativeHelpTranslation() {
-        if (!translationEnabled) return; // ★この行を追加
-        if (helpTranslationTimer) clearTimeout(helpTranslationTimer);
-        helpTranslationTimer = setTimeout(async () => {
-            helpTranslationTimer = null;
-            const dialog = findNativeHelpDialogForTranslation();
-            if (!dialog) return;
-            await translateNativeHelpDialog(dialog);
-            // スクロールや遅延レンダリングに対応
-            setTimeout(() => {
-                const current = findNativeHelpDialogForTranslation();
-                if (current) translateNativeHelpDialog(current).catch(() => { });
-            }, 400);
-        }, 150);
-    }
-
-    function bindNativeHelpTranslation() {
-        if (window.__selectionListNativeHelpTranslationBound) return;
-        window.__selectionListNativeHelpTranslationBound = true;
-
-        const helpObserver = new MutationObserver(() => {
-            const dialog = findNativeHelpDialogForTranslation();
-            if (dialog) scheduleNativeHelpTranslation();
-        });
-        helpObserver.observe(document.documentElement || document.body, { childList: true, subtree: true });
-
-        document.addEventListener("click", event => {
-            const target = event.target?.closest?.('[role="menuitem"], button, [aria-label], li, div, span');
-            if (!target) return;
-            const text = normalize(target.innerText || target.textContent || target.getAttribute?.("aria-label") || "");
-            if (text === "Help" || text === "ヘルプ" || /ヘルプ|Help/i.test(text)) {
-                scheduleNativeHelpTranslation();
-            }
-        }, true);
-    }
-
-    // ============================================================
-    // 左ブロック一覧メニュー（フライアウト）ブロック名の和訳＆拡大ポップアップ表示
-    // - スペース無しのCamelCase単語を自動抽出して和訳
-    // - マウスフォーカス（ホバー）でブロックの「すぐ上」に大きく表示
-    // ============================================================
-    let flyoutTooltipEl = null;
-    let flyoutTooltipTarget = null;
-    let flyoutTooltipLeaveTimer = null;
-
-    function getOrCreateFlyoutTooltip() {
-        if (flyoutTooltipEl) return flyoutTooltipEl;
-        const tip = document.createElement("div");
-        tip.setAttribute("data-selection-list-plugin", "flyout-tooltip");
-        Object.assign(tip.style, {
-            position: "fixed",
-            zIndex: "2147483647",
-            pointerEvents: "none",
-            background: "rgba(14, 20, 22, 0.96)",
-            color: "#ffffff",
-            border: "2px solid #4da3ff",
-            borderRadius: "8px",
-            padding: "10px 16px",
-            boxShadow: "0 8px 30px rgba(0,0,0,.75)",
-            backdropFilter: "blur(6px)",
-            fontFamily: "'Segoe UI', Meiryo, sans-serif",
-            maxWidth: "460px",
-            minWidth: "200px",
-            display: "none",
-            flexDirection: "column",
-            gap: "5px",
-            transition: "opacity 0.12s ease-out, transform 0.12s ease-out",
-            opacity: "0",
-            transform: "translateY(4px)"
-        });
-
-        const jaTitle = document.createElement("div");
-        jaTitle.className = "flyout-tip-ja";
-        Object.assign(jaTitle.style, {
-            fontSize: "20px",
-            fontWeight: "bold",
-            color: "#61c3ff",
-            lineHeight: "1.3",
-            letterSpacing: "0.5px",
-            wordBreak: "break-word"
-        });
-
-        tip.appendChild(jaTitle);
-        document.body.appendChild(tip);
-        flyoutTooltipEl = tip;
-        tip._jaTitle = jaTitle;
-        return tip;
-    }
-
-    const flyoutTranslationCacheKey = "selectionListFlyoutBlockTranslationCache_v2";
-    let flyoutTranslationCache = {};
-    try { flyoutTranslationCache = JSON.parse(localStorage.getItem(flyoutTranslationCacheKey) || "{}"); } catch (_) { flyoutTranslationCache = {}; }
-
-
-    function positionFlyoutTooltip(targetRect) {
-        if (!flyoutTooltipEl) return;
-        const tipWidth = flyoutTooltipEl.offsetWidth;
-        const tipHeight = flyoutTooltipEl.offsetHeight;
-
-        // 対象ブロックの水平方向中央
-        let left = targetRect.left;
-        // 対象ブロックのすぐ上 (マージン8px)
-        let top = targetRect.top - tipHeight - 8;
-
-        // 画面上部からはみ出る場合は、すぐ下に配置
-        if (top < 8) {
-            top = targetRect.bottom + 8;
-        }
-
-        // 画面左右のはみ出し補正
-        left = Math.max(10, Math.min(window.innerWidth - tipWidth - 10, left));
-
-        flyoutTooltipEl.style.left = `${Math.round(left)}px`;
-        flyoutTooltipEl.style.top = `${Math.round(top)}px`;
-    }
-
-    async function showFlyoutTooltip(targetElement, rawName, isWorkspace = false) {
-        const tip = getOrCreateFlyoutTooltip();
-        flyoutTooltipTarget = targetElement;
-        const targetRect = targetElement.getBoundingClientRect();
-
-        // ワークスペース上のブロックは 0.7倍、一覧メニューは通常サイズ
-        tip.style.zoom = "1";
-        if (isWorkspace) {
-            tip.style.padding = "6px 11px";
-            tip.style.minWidth = "130px";
-            tip.style.borderRadius = "6px";
-            tip.style.borderWidth = "1.5px";
-            tip._jaTitle.style.fontSize = "14px";
-        } else {
-            tip.style.padding = "10px 16px";
-            tip.style.minWidth = "200px";
-            tip.style.borderRadius = "8px";
-            tip.style.borderWidth = "2px";
-            tip._jaTitle.style.fontSize = "20px";
-        }
-
-        tip._jaTitle.textContent = "翻訳中…";
-        tip.style.display = "flex";
-        positionFlyoutTooltip(targetRect);
-
-        requestAnimationFrame(() => {
-            tip.style.opacity = "1";
-            tip.style.transform = "translateY(0)";
-        });
-
-        const ja = await getTranslatedBlockName(rawName);
-        if (flyoutTooltipTarget === targetElement) {
-            tip._jaTitle.textContent = ja || rawName;
-            positionFlyoutTooltip(targetElement.getBoundingClientRect());
-        }
-    }
-
-    function showDirectTooltip(targetElement, text, isWorkspace = false) {
-        const tip = getOrCreateFlyoutTooltip();
-        flyoutTooltipTarget = targetElement;
-        const targetRect = targetElement.getBoundingClientRect();
-
-        tip.style.zoom = "1";
-        if (isWorkspace) {
-            tip.style.padding = "6px 11px";
-            tip.style.minWidth = "130px";
-            tip.style.borderRadius = "6px";
-            tip.style.borderWidth = "1.5px";
-            tip._jaTitle.style.fontSize = "14px";
-        } else {
-            tip.style.padding = "10px 16px";
-            tip.style.minWidth = "200px";
-            tip.style.borderRadius = "8px";
-            tip.style.borderWidth = "2px";
-            tip._jaTitle.style.fontSize = "20px";
-        }
-
-        tip._jaTitle.textContent = text;
-        tip.style.display = "flex";
-        positionFlyoutTooltip(targetRect);
-
-        requestAnimationFrame(() => {
-            tip.style.opacity = "1";
-            tip.style.transform = "translateY(0)";
-        });
-    }
-
-    function hideFlyoutTooltip() {
-        if (!flyoutTooltipEl) return;
-        flyoutTooltipTarget = null;
-        flyoutTooltipEl.style.opacity = "0";
-        flyoutTooltipEl.style.transform = "translateY(4px)";
-        clearTimeout(flyoutTooltipLeaveTimer);
-        flyoutTooltipLeaveTimer = setTimeout(() => {
-            if (!flyoutTooltipTarget && flyoutTooltipEl) {
-                flyoutTooltipEl.style.display = "none";
-            }
-        }, 120);
-    }
-
-    function extractBlockLabelFromFlyoutElement(el) {
-        if (!el) return "";
-        const textNodes = [...el.querySelectorAll("text.blocklyText")];
-        if (textNodes.length) {
-            const combined = textNodes.map(t => normalize(t.textContent)).filter(Boolean).join(" ");
-            if (combined) return combined;
-        }
-        const type = el.getAttribute?.("data-type") || el.dataset?.type;
-        if (type) return type;
-        const plain = normalize(el.innerText || el.textContent || "");
-        return plain.split(/\r?\n/)[0]?.trim() || "";
-    }
-
-    function bindFlyoutHoverListener() {
-        if (window.__selectionListFlyoutHoverBound) return;
-        window.__selectionListFlyoutHoverBound = true;
-
-        document.addEventListener("mouseover", event => {
-            if (!translationEnabled) return; // ★この行を追加（OFF時は即座に中断）
-
-            const target = event.target?.closest?.(
-                '.blocklyFlyout g.blocklyDraggable, .blocklyFlyoutScrollbar ~ svg g.blocklyDraggable, [class*="flyout" i] g.blocklyDraggable, [class*="flyout" i] [class*="block" i]'
-            );
-            if (!target) {
-                if (flyoutTooltipTarget && !event.target?.closest?.('[data-selection-list-plugin="flyout-tooltip"]')) {
-                    hideFlyoutTooltip();
-                }
-                return;
-            }
-            if (flyoutTooltipTarget === target) return;
-
-            const label = extractBlockLabelFromFlyoutElement(target);
-            if (!label || label.length < 2) return;
-            showFlyoutTooltip(target, label);
-        }, true);
-
-        document.addEventListener("mouseout", event => {
-            if (!flyoutTooltipTarget) return;
-            const target = event.target?.closest?.(
-                '.blocklyFlyout g.blocklyDraggable, .blocklyFlyoutScrollbar ~ svg g.blocklyDraggable, [class*="flyout" i] g.blocklyDraggable, [class*="flyout" i] [class*="block" i]'
-            );
-            if (target === flyoutTooltipTarget) {
-                hideFlyoutTooltip();
-            }
-        }, true);
-    }
-
-    // ============================================================
-    // システムの凡例ポップアップ（ツールチップ）の日本語化
-    // ============================================================
-    function bindNativeTooltipTranslation() {
-        if (window.__selectionListTooltipTranslationBound) return;
-        window.__selectionListTooltipTranslationBound = true;
-
-        // システムの崩れた凡例が被らないよう、日本語化ON時はシステム標準ツールチップを隠す
-        const hideNativeStyle = document.createElement("style");
-        hideNativeStyle.setAttribute("data-selection-list-plugin", "hide-native-tooltip");
-        document.head.appendChild(hideNativeStyle);
-
-        const updateTooltipVisibility = () => {
-            hideNativeStyle.textContent = translationEnabled ? ".blocklyTooltipDiv { display: none !important; }" : "";
-        };
-        updateTooltipVisibility();
-
-        // 日本語化ON/OFF切り替え時にも連動させる
-        document.addEventListener("click", () => setTimeout(updateTooltipVisibility, 50), true);
-
-        // ワークスペース上のブロックにホバーした時に枠付きポップアップを表示
-        document.addEventListener("mouseover", event => {
-            if (!translationEnabled) return;
-            // ワークスペース上の配置済みブロック（フライアウト外）を検知
-            const blockEl = event.target?.closest?.(".blocklyWorkspace g.blocklyDraggable");
-            if (!blockEl || blockEl.closest(".blocklyFlyout")) return;
-            if (flyoutTooltipTarget === blockEl) return;
-
-            // ブロックIDから正式な型名・識別子を取得（なければ表示テキスト）
-            const id = blockEl.getAttribute?.("data-id") || blockEl.dataset?.id;
-            const block = getBlockFromId(id);
-            const rawName = block?.type || extractBlockLabelFromFlyoutElement(blockEl);
-            if (!rawName || rawName.length < 2) return;
-
-            showFlyoutTooltip(blockEl, rawName, true); // ★第3引数に true を追加
-        }, true);
-
-        document.addEventListener("mouseout", event => {
-            if (!flyoutTooltipTarget) return;
-            const blockEl = event.target?.closest?.(".blocklyWorkspace g.blocklyDraggable");
-            if (blockEl === flyoutTooltipTarget) {
-                hideFlyoutTooltip();
-            }
-        }, true);
-    }
-
-    // 日本語文字（ひらがな、カタカナ、漢字）を含むか判定
-    function hasJapanese(text) {
-        return /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/.test(String(text || ""));
-    }
-
-    // ============================================================
-    // JListSelect キャッシュから日本語を直接読み出す (日本語のみ採用)
-    // ============================================================
-    function getJListSelectCachedTranslation(rawText) {
-        const key = normalize(rawText);
-        if (!key) return null;
-
-        // 1. 専門修正辞書
-        if (TRANSLATION_CORRECTIONS[key] && hasJapanese(TRANSLATION_CORRECTIONS[key])) {
-            return TRANSLATION_CORRECTIONS[key];
-        }
-
-        // 2. 手動JSON読込 / ブロックキャッシュ
-        if (flyoutTranslationCache[key] && hasJapanese(flyoutTranslationCache[key])) {
-            return flyoutTranslationCache[key];
-        }
-
-        // 3. JListSelect イベントタイプ用キャッシュ (日本語の時のみ採用)
-        try {
-            const eventCache = JSON.parse(localStorage.getItem("selectionListTranslationCache_v3_eventtype_camel") || "{}");
-            if (eventCache[key] && hasJapanese(eventCache[key])) {
-                return eventCache[key];
-            }
-        } catch (_) { }
-
-        // 4. JListSelect アイテム名パーツ用キャッシュ (日本語の時のみ採用)
-        try {
-            const partsCache = JSON.parse(localStorage.getItem("selectionListTranslationCache_v2_parts") || "{}");
-            if (partsCache[key] && hasJapanese(partsCache[key])) {
-                return partsCache[key];
-            }
-            if (key.includes("_")) {
-                const parts = key.split("_");
-                const translatedParts = parts.map(p => (partsCache[p] && hasJapanese(partsCache[p])) ? partsCache[p] : p);
-                const candidate = translatedParts.join("_");
-                if (hasJapanese(candidate)) {
-                    return candidate;
-                }
-            }
-        } catch (_) { }
-
-        // 5. 翻訳マスターキャッシュ
-        if (masterTranslationCache[key] && hasJapanese(masterTranslationCache[key])) {
-            return masterTranslationCache[key];
-        }
-
-        return null; // 日本語化できていない場合は出さない (英語のまま出さない)
-    }
-
-    // ============================================================
-    // JListSelect未キャッシュ時のオンライン翻訳フォールバック
-    // ============================================================
-    async function resolveDropdownTranslation(rawText) {
-        const key = normalize(rawText);
-        if (!key) return null;
-
-        // 1. まずJListSelectキャッシュにあれば即座に返す
-        const cached = getJListSelectCachedTranslation(key);
-        if (cached) return cached;
-
-        // 2. キャッシュにない場合のみオンライン翻訳を実行
-        let translated = "";
-        try {
-            if (key.includes("_")) {
-                const parts = key.split("_");
-                const translatedParts = await Promise.all(parts.map(async p => {
-                    if (!p || shouldKeepTranslationToken(p)) return p;
-                    const hit = getJListSelectCachedTranslation(p);
-                    if (hit) return hit;
-                    const res = await translateTextBatch(p);
-                    return applyTranslationCorrection(p, res);
-                }));
-                translated = translatedParts.join("_");
-            } else {
-                const spaced = splitCamelCaseForTranslation(key);
-                translated = await translateTextBatch(spaced);
-                translated = applyTranslationCorrection(key, translated);
-            }
-        } catch (_) {
-            return null; // 通信エラー時は表示無し
-        }
-
-        // 3. 日本語が得られた場合のみ採用し、次回用にJListSelectキャッシュへ保存
-        if (translated && hasJapanese(translated)) {
-            try {
-                const eventCache = JSON.parse(localStorage.getItem("selectionListTranslationCache_v3_eventtype_camel") || "{}");
-                eventCache[key] = translated;
-                localStorage.setItem("selectionListTranslationCache_v3_eventtype_camel", JSON.stringify(eventCache));
-            } catch (_) { }
-            return translated;
-        }
-
-        // 4. それでもダメ（英語のまま等）なら表示無し
-        return null;
-    }
-
-    // ============================================================
-    // プルダウン（ドロップダウンメニュー＆選択肢）の日本語ポップアップ
-    // ============================================================
-    function bindDropdownHoverListener() {
-        if (window.__selectionListDropdownHoverBound) return;
-        window.__selectionListDropdownHoverBound = true;
-
-        document.addEventListener("mouseover", event => {
-            if (!translationEnabled) return;
-
-            // 1. 開いたプルダウンメニュー内の各選択肢
-            const menuItem = event.target?.closest?.(
-                '.blocklyDropdownMenu .blocklyMenuItem, .goog-menu .goog-menuitem, [role="menuitem"], .blocklyMenu .blocklyMenuItem'
-            );
-            if (menuItem) {
-                if (flyoutTooltipTarget === menuItem) return;
-                const rawText = normalize(menuItem.innerText || menuItem.textContent);
-                if (!rawText || rawText.length < 2 || /^[\d\s.,+\-*/=()]+$/.test(rawText)) return;
-
-                flyoutTooltipTarget = menuItem;
-                // キャッシュがあれば即時表示、無ければオンライン翻訳
-                const fastJa = getJListSelectCachedTranslation(rawText);
-                if (fastJa) {
-                    showDirectTooltip(menuItem, fastJa, true);
-                } else {
-                    resolveDropdownTranslation(rawText).then(ja => {
-                        // 日本語が得られた場合のみ表示（ダメなら表示無し）
-                        if (ja && flyoutTooltipTarget === menuItem) {
-                            showDirectTooltip(menuItem, ja, true);
-                        }
-                    });
-                }
-                return;
-            }
-
-            // 2. ブロック表面のプルダウン表示枠 (現在選択されている値)
-            const dropdownField = event.target?.closest?.(
-                '.blocklyWorkspace g.blocklyEditableText, .blocklyFlyout g.blocklyEditableText'
-            );
-            if (dropdownField) {
-                if (flyoutTooltipTarget === dropdownField) return;
-                const rawText = normalize(dropdownField.textContent);
-                if (!rawText || rawText.length < 2 || /^[\d\s.,+\-*/=()]+$/.test(rawText)) return;
-
-                flyoutTooltipTarget = dropdownField;
-                const fastJa = getJListSelectCachedTranslation(rawText);
-                if (fastJa) {
-                    showDirectTooltip(dropdownField, fastJa, true);
-                } else {
-                    resolveDropdownTranslation(rawText).then(ja => {
-                        if (ja && flyoutTooltipTarget === dropdownField) {
-                            showDirectTooltip(dropdownField, ja, true);
-                        }
-                    });
-                }
-            }
-        }, true);
-
-        document.addEventListener("mouseout", event => {
-            if (!flyoutTooltipTarget) return;
-            const target = event.target?.closest?.(
-                '.blocklyDropdownMenu .blocklyMenuItem, .goog-menu .goog-menuitem, [role="menuitem"], .blocklyMenu .blocklyMenuItem, g.blocklyEditableText'
-            );
-            if (target === flyoutTooltipTarget) {
-                hideFlyoutTooltip();
-            }
-        }, true);
-
-        // プルダウンが閉じられた（クリックされた）時は即座にポップアップを消去
-        document.addEventListener("click", () => {
-            hideFlyoutTooltip();
-        }, true);
-    }
-
     let isScanning = false;
     function scan() {
-        if (isScanning) return; // 無限ループ防止ガード
+        if (isScanning) return;
         isScanning = true;
         try {
             const block = getCurrentContextBlock();
@@ -2803,8 +1625,6 @@
                 if (eligible) {
                     addSelectionListMenu(submenu);
                 }
-                addTranslationToggleMenu(submenu);
-                addCacheManagementMenu(submenu); // ★この行を追加
             }
             if (!eligible) {
                 removeFloatingMenu();
@@ -2838,10 +1658,6 @@
     }, true);
 
     plugin.initializeWorkspace = async function () {
-        bindNativeHelpTranslation();
-        bindFlyoutHoverListener();
-        bindNativeTooltipTranslation();
-        bindDropdownHoverListener(); // ★この行を追加
         startObserver();
         scan();
     };
