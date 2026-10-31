@@ -887,9 +887,9 @@
         const ruleMode = isRuleBlock(block);
         const ruleEventType = ruleMode ? getRuleEventType(block) : "";
         title.textContent = ruleMode
-            ? `List → JlistSelect  |  EVENTTYPE: ${ruleEventType}`
-            : (blockTypeName ? `List → JlistSelect  |  ${blockTypeName}` : "List → JlistSelect");
-        title.title = ruleMode ? `EVENTTYPE: ${ruleEventType}` : (blockTypeName || "List → JlistSelect");
+            ? `List → ListSelect  |  EVENTTYPE: ${ruleEventType}`
+            : (blockTypeName ? `List → ListSelect  |  ${blockTypeName}` : "List → ListSelect");
+        title.title = ruleMode ? `EVENTTYPE: ${ruleEventType}` : (blockTypeName || "List → ListSelect");
         Object.assign(title.style, { fontSize: "18px", fontWeight: "700", flex: "1", cursor: "move", userSelect: "none", minWidth: "0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" });
 
         const displayButton = document.createElement("button");
@@ -1488,7 +1488,7 @@
         const jpActive = isJapanesePluginActive();
         const entries = [];
 
-        entries.push(menuItem("List → listSelect", async (event) => {
+        entries.push(menuItem("List → ListSelect", async (event) => {
             try {
                 event?.preventDefault?.();
                 event?.stopPropagation?.();
