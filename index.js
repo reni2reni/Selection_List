@@ -1488,7 +1488,7 @@
         const jpActive = isJapanesePluginActive();
         const entries = [];
 
-        entries.push(menuItem("List → JlistSelect", async (event) => {
+        entries.push(menuItem("List → listSelect", async (event) => {
             try {
                 event?.preventDefault?.();
                 event?.stopPropagation?.();
