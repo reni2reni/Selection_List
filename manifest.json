@@ -1,8 +1,8 @@
 {
-  "id": "Selection_List",
-  "name": "Selection_List",
-  "version": "1.3.0",
-  "description": "Export Selection List item names from BF2042 Portal to a text file",
-  "author": "reni2",
-  "main": "index.js"
+    "id": "Selection_List",
+    "name": "Selection_List",
+    "version": "2.0.0",
+    "description": "Export Selection List item names from BF2042 Portal to a text file or Blockly arrays",
+    "author": "reni2",
+    "main": "index.js"
 }
