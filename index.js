@@ -1440,8 +1440,14 @@
         return false;
     }
 
-    function getCurrentEligibleBlock() {
-        const block = getCurrentContextBlock();
+    function getCurrentEligibleBlock(scope) {
+        // Use Blockly's actual clicked block scope first; DOM capture is fallback.
+        const scopedBlock = scope?.block || scope?.targetBlock || null;
+        const block = scopedBlock || getCurrentContextBlock();
+        if (scopedBlock) {
+            lastContextBlock = scopedBlock;
+            lastContextBlockId = scopedBlock.id || null;
+        }
         return isSelectionListBlock(block) ? block : null;
     }
 
@@ -1468,8 +1474,8 @@
     }
 
     function contextMenuPrecondition(predicate) {
-        return function () {
-            const block = getCurrentEligibleBlock();
+        return function (scope) {
+            const block = getCurrentEligibleBlock(scope);
             return block && predicate(block) ? "enabled" : "hidden";
         };
     }
@@ -1478,10 +1484,13 @@
         return {
             id,
             displayText,
-            scopeType: _Blockly.ContextMenuRegistry.ScopeType.WORKSPACE,
+            scopeType: _Blockly.ContextMenuRegistry.ScopeType.BLOCK,
             weight: 100,
             preconditionFn: contextMenuPrecondition(predicate || (() => true)),
-            callback
+            callback: function (scope) {
+                getCurrentEligibleBlock(scope);
+                return callback(scope);
+            }
         };
     }
 
@@ -1528,14 +1537,19 @@
         }
 
         const candidates = collectRegistryItems(registry);
-        const optionsMenu = candidates.find(item =>
-            String(item.displayText || "").replace(/[>\s]+$/g, "").trim().toLowerCase() === "options"
+        const optionsMenus = candidates.filter(item =>
+            String(item.displayText || "").replace(/[>\\s]+$/g, "").trim().toLowerCase() === "options"
         );
+        const blockScope = _Blockly.ContextMenuRegistry.ScopeType.BLOCK;
+        const optionsMenu = optionsMenus.find(item => item.scopeType === blockScope) || optionsMenus[0];
 
         if (!optionsMenu || !Array.isArray(optionsMenu.options)) {
             console.warn("[Selection_List] Could not locate the host Options > menu. Selection List menu was not registered.");
             return false;
         }
+
+        // Restrict Options to block context instead of workspace background.
+        optionsMenu.scopeType = blockScope;
 
         const menuReference = "menus.selectionListPluginMenu";
         if (!optionsMenu.options.includes(menuReference)) {
@@ -1554,7 +1568,7 @@
             return;
         }
 
-        const scope = _Blockly.ContextMenuRegistry.ScopeType.WORKSPACE;
+        const scope = _Blockly.ContextMenuRegistry.ScopeType.BLOCK;
         const menu = plugin.createMenu("selectionListPluginMenu", "Selection List", scope);
         menu.options = [
             "items.selectionListToJListSelect",
@@ -1652,12 +1666,11 @@
         try {
             const blockEl = event.target?.closest?.("g.blocklyDraggable");
             const id = blockEl?.getAttribute?.("data-id") || blockEl?.dataset?.id || null;
-            lastContextBlockId = id ? String(id) : null;
-            lastContextBlock = getBlockFromId(lastContextBlockId);
-        } catch (_) {
-            lastContextBlockId = null;
-            lastContextBlock = null;
-        }
+            if (id) {
+                lastContextBlockId = String(id);
+                lastContextBlock = getBlockFromId(lastContextBlockId);
+            }
+        } catch (_) { }
     }, true);
 
     plugin.initializeWorkspace = async function () {
