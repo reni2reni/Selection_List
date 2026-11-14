@@ -2,7 +2,12 @@
 (function () {
     "use strict";
 
-    const plugin = BF2042Portal.Plugins.getPlugin("Selection_List");
+    const portalApi = (typeof BF2042Portal !== "undefined" ? BF2042Portal : window.BF2042Portal);
+    const plugin = portalApi?.Plugins?.getPlugin?.("Selection_List");
+    if (!plugin) {
+        console.error("[Selection_List] BF2042 Portal Extensions Plugin SDK is unavailable. Check that the plugin is loaded by BF2042 Portal Extensions 2.x.");
+        return;
+    }
     let observer = null;
     let lastContextBlockId = null;
     let lastContextBlock = null;
