@@ -2,12 +2,7 @@
 (function () {
     "use strict";
 
-    const portalApi = (typeof BF2042Portal !== "undefined" ? BF2042Portal : window.BF2042Portal);
-    const plugin = portalApi?.Plugins?.getPlugin?.("Selection_List");
-    if (!plugin) {
-        console.error("[Selection_List] Plugin SDK is unavailable. Check that BF2042 Portal Extensions is loaded.");
-        return;
-    }
+    const plugin = BF2042Portal.Plugins.getPlugin("Selection_List");
     let observer = null;
     let lastContextBlockId = null;
     let lastContextBlock = null;
@@ -1418,8 +1413,10 @@
         return { block, names };
     }
 
-    // The v2 SDK owns Blockly context menus. Do not inject DOM elements into
-    // the old `.bf6-experience-manager-options-submenu` markup.
+    let floatingMenuObserver = null;
+    let lastContextMenuX = 0;
+    let lastContextMenuY = 0;
+
     function isSelectionListBlock(block) {
         if (!block) return false;
         if (isRuleBlock(block)) return true;
@@ -1440,241 +1437,228 @@
         return false;
     }
 
-    function getCurrentEligibleBlock(scope) {
-        // Use Blockly's actual clicked block scope first; DOM capture is fallback.
-        const scopedBlock = scope?.block || scope?.targetBlock || null;
-        const block = scopedBlock || getCurrentContextBlock();
-        if (scopedBlock) {
-            lastContextBlock = scopedBlock;
-            lastContextBlockId = scopedBlock.id || null;
-        }
-        return isSelectionListBlock(block) ? block : null;
-    }
+    let floatingMenuCloseTimer = null;
 
-    function getNamesOrAlert() {
-        const block = getCurrentEligibleBlock();
-        if (!block) {
-            alert(getPortalLanguage() === "ja" ? "右クリックしたブロックを取得できませんでした。" : "Could not get the context block.");
-            return null;
-        }
-        const names = extractSelectionItems(block);
-        if (!names.length) {
-            alert(getPortalLanguage() === "ja" ? "選択リストの候補を取得できませんでした。" : "No selection-list options could be found on this block.");
-            return null;
-        }
-        return { block, names };
-    }
-
-    function getContextListDataOrAlert() {
-        const data = getContextListData();
-        if (!data) {
-            alert(getPortalLanguage() === "ja" ? "選択リストの候補を取得できませんでした。" : "No selection-list options could be found on this block.");
-        }
-        return data;
-    }
-
-    function contextMenuPrecondition(predicate) {
-        return function (scope) {
-            const block = getCurrentEligibleBlock(scope);
-            return block && predicate(block) ? "enabled" : "hidden";
-        };
-    }
-
-    function makeSelectionItem(id, displayText, callback, predicate) {
-        return {
-            id,
-            displayText,
-            scopeType: _Blockly.ContextMenuRegistry.ScopeType.BLOCK,
-            weight: 100,
-            preconditionFn: contextMenuPrecondition(predicate || (() => true)),
-            callback: function (scope) {
-                getCurrentEligibleBlock(scope);
-                return callback(scope);
+    function scheduleCloseFloatingMenu() {
+        if (floatingMenuCloseTimer) clearTimeout(floatingMenuCloseTimer);
+        floatingMenuCloseTimer = setTimeout(() => {
+            const rootItem = document.querySelector('[data-selection-list-plugin="root"]');
+            const floatingPanel = document.querySelector('[data-selection-list-plugin="floating-root"]');
+            const isHoverRoot = rootItem && rootItem.matches(":hover");
+            const isHoverFloating = floatingPanel && floatingPanel.matches(":hover");
+            if (!isHoverRoot && !isHoverFloating) {
+                removeFloatingMenu();
             }
-        };
+        }, 120);
     }
 
-    // Find the existing host "Options" menu in Blockly's registry. The SDK
-    // sample demonstrates that nested menus are linked through menu.options.
-    function collectRegistryItems(registry) {
-        const found = [];
-        const seen = new Set();
-
-        function add(value) {
-            if (!value || (typeof value !== "object" && typeof value !== "function") || seen.has(value)) return;
-            seen.add(value);
-            if (Array.isArray(value)) {
-                for (const item of value) add(item);
-                return;
-            }
-            if (value instanceof Map) {
-                for (const item of value.values()) add(item);
-                return;
-            }
-            if (value instanceof Set) {
-                for (const item of value.values()) add(item);
-                return;
-            }
-            if (Array.isArray(value.options) && (typeof value.displayText === "string" || typeof value.id === "string")) {
-                found.push(value);
-            }
-            for (const key of ["registry_", "items_", "items", "registry", "menus", "values_"]) {
-                try { add(value[key]); } catch (_) { }
-            }
+    function cancelCloseFloatingMenu() {
+        if (floatingMenuCloseTimer) {
+            clearTimeout(floatingMenuCloseTimer);
+            floatingMenuCloseTimer = null;
         }
-
-        add(registry);
-        return found;
     }
 
-    function attachSelectionMenuToOptions() {
-        if (selectionMenuAttached) return true;
-
-        const registry = _Blockly?.ContextMenuRegistry?.registry;
-        if (!registry) {
-            console.warn("[Selection_List] Blockly ContextMenuRegistry is not available yet.");
-            return false;
+    function removeFloatingMenu() {
+        document.querySelectorAll('[data-selection-list-plugin="floating-root"]').forEach(el => el.remove());
+        if (floatingMenuObserver) {
+            try { floatingMenuObserver.disconnect(); } catch (_) { }
+            floatingMenuObserver = null;
         }
-
-        const candidates = collectRegistryItems(registry);
-        const optionsMenus = candidates.filter(item =>
-            String(item.displayText || "").replace(/[>\\s]+$/g, "").trim().toLowerCase() === "options"
-        );
-        const blockScope = _Blockly.ContextMenuRegistry.ScopeType.BLOCK;
-        const optionsMenu = optionsMenus.find(item => item.scopeType === blockScope) || optionsMenus[0];
-
-        if (!optionsMenu || !Array.isArray(optionsMenu.options)) {
-            console.warn("[Selection_List] Could not locate the host Options > menu. Selection List menu was not registered.");
-            return false;
-        }
-
-        // Restrict Options to block context instead of workspace background.
-        optionsMenu.scopeType = blockScope;
-
-        const menuReference = "menus.selectionListPluginMenu";
-        if (!optionsMenu.options.includes(menuReference)) {
-            optionsMenu.options.push(menuReference);
-        }
-        selectionMenuAttached = true;
-        console.info("[Selection_List] Added Selection List to the Options submenu.");
-        return true;
     }
 
-    let selectionMenuAttached = false;
+    function createFloatingMenu(anchor) {
+        removeFloatingMenu();
 
-    function registerSelectionListContextMenu() {
-        if (selectionMenuRegistered) {
-            attachSelectionMenuToOptions();
-            return;
+        const panel = document.createElement("div");
+        panel.setAttribute("data-selection-list-plugin", "floating-root");
+        const rect = anchor.getBoundingClientRect();
+
+        Object.assign(panel.style, {
+            position: "fixed",
+            left: `${rect.left + rect.width / 2}px`,
+            top: `${rect.bottom}px`,
+            transform: "translateX(0)",
+            width: "190px",
+            minWidth: "190px",
+            boxSizing: "border-box"
+        });
+
+        const ruleMode = isRuleBlock(getCurrentContextBlock());
+        const jpActive = isJapanesePluginActive();
+        const entries = [];
+
+        entries.push(menuItem("List → ListSelect", async (event) => {
+            try {
+                event?.preventDefault?.();
+                event?.stopPropagation?.();
+                event?.stopImmediatePropagation?.();
+            } catch (_) { }
+            setTimeout(() => {
+                openJListSelectFromContext().catch(error => console.error("Selection_List JlistSelect failed", error));
+            }, 0);
+        }));
+
+        if (!ruleMode) {
+            entries.push(menuItem("List → array", async () => {
+                const data = getNamesOrAlert();
+                if (!data) return;
+                await createParallel(data.block, data.names);
+                removeFloatingMenu();
+            }));
+
+            entries.push(menuItem("ListName → array", async () => {
+                const data = getNamesOrAlert();
+                if (!data) return;
+                await createTextArray(data.block, data.names);
+                removeFloatingMenu();
+            }));
+
+            // Japanese プラグイン有効時のみ表示
+            if (jpActive) {
+                entries.push(menuItem("ListName → array (J)", async () => {
+                    const data = getNamesOrAlert();
+                    if (!data) return;
+                    await createJapaneseArray(data.block, data.names);
+                    removeFloatingMenu();
+                }));
+            }
+
+            entries.push(menuItem("ListName → File", () => {
+                const data = getNamesOrAlert();
+                if (!data) return;
+                exportTextFile(data.block, data.names);
+                removeFloatingMenu();
+            }));
+
+            // Japanese プラグイン有効時のみ表示
+            if (jpActive) {
+                entries.push(menuItem("ListName → File (E,J)", async () => {
+                    const data = getNamesOrAlert();
+                    if (!data) return;
+                    await exportTranslatedTextFile(data.block, data.names);
+                    removeFloatingMenu();
+                }));
+            }
+        } else {
+            // Ruleブロックの場合
+            entries.push(menuItem("ListName → File", () => {
+                const data = getContextListData();
+                if (!data) return;
+                exportTextFile(data.block, data.names);
+                removeFloatingMenu();
+            }));
+
+            if (jpActive) {
+                entries.push(menuItem("ListName → File (E,J)", async () => {
+                    const data = getContextListData();
+                    if (!data) return;
+                    await exportTranslatedTextFile(data.block, data.names);
+                    removeFloatingMenu();
+                }));
+            }
         }
 
-        const scope = _Blockly.ContextMenuRegistry.ScopeType.BLOCK;
-        const menu = plugin.createMenu("selectionListPluginMenu", "Selection List", scope);
-        menu.options = [
-            "items.selectionListToJListSelect",
-            "items.selectionListToArray",
-            "items.selectionListNameToArray",
-            "items.selectionListNameToArrayJapanese",
-            "items.selectionListNameToFile",
-            "items.selectionListNameToTranslatedFile"
-        ];
+        entries.forEach(entry => panel.appendChild(entry));
 
-        const items = [
-            makeSelectionItem(
-                "selectionListToJListSelect",
-                "List → ListSelect",
-                async function () {
-                    try {
-                        await openJListSelectFromContext();
-                    } catch (error) {
-                        console.error("[Selection_List] JListSelect failed", error);
-                    }
+        panel.addEventListener("mouseenter", cancelCloseFloatingMenu);
+        panel.addEventListener("mouseleave", scheduleCloseFloatingMenu);
+
+        anchor.appendChild(panel);
+
+        const panelRect = panel.getBoundingClientRect();
+        if (panelRect.right > window.innerWidth) {
+            panel.style.left = `${Math.max(0, window.innerWidth - panelRect.width - 8)}px`;
+        }
+        if (panelRect.bottom > window.innerHeight) {
+            panel.style.top = `${Math.max(0, window.innerHeight - panelRect.height - 8)}px`;
+        }
+
+        return panel;
+    }
+
+    function addSelectionListMenu(submenu) {
+        if (!submenu || submenu.querySelector('[data-selection-list-plugin="root"]')) return;
+        const item = document.createElement("div");
+        item.setAttribute("data-selection-list-plugin", "root");
+        item.className = "selection-list-plugin-menu-item";
+        Object.assign(item.style, {
+            padding: "5px 18px",
+            whiteSpace: "nowrap",
+            background: "rgb(22, 29, 30)",
+            color: "#ffffff",
+            cursor: "pointer",
+            fontSize: "15px",
+            lineHeight: "1.3",
+            borderTop: "1px solid #3a4648",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            width: "100%"
+        });
+        const label = document.createElement("span");
+        label.textContent = "Selection List ▶     ";
+        item.appendChild(label);
+
+        item.addEventListener("mouseenter", () => {
+            item.style.background = "rgb(48, 60, 62)";
+            cancelCloseFloatingMenu();
+            createFloatingMenu(item);
+        });
+        item.addEventListener("mouseleave", () => {
+            item.style.background = "rgb(22, 29, 30)";
+            scheduleCloseFloatingMenu();
+        });
+        submenu.appendChild(item);
+    }
+
+    let isScanning = false;
+    function scan() {
+        if (isScanning) return;
+        isScanning = true;
+        try {
+            const block = getCurrentContextBlock();
+            const eligible = isSelectionListBlock(block);
+            const submenus = document.querySelectorAll(".bf6-experience-manager-options-submenu");
+
+            for (const submenu of submenus) {
+                if (eligible) {
+                    addSelectionListMenu(submenu);
                 }
-            ),
-            makeSelectionItem(
-                "selectionListToArray",
-                "List → array",
-                async function () {
-                    const data = getNamesOrAlert();
-                    if (data) await createParallel(data.block, data.names);
-                },
-                block => !isRuleBlock(block)
-            ),
-            makeSelectionItem(
-                "selectionListNameToArray",
-                "ListName → array",
-                async function () {
-                    const data = getNamesOrAlert();
-                    if (data) await createTextArray(data.block, data.names);
-                },
-                block => !isRuleBlock(block)
-            ),
-            makeSelectionItem(
-                "selectionListNameToArrayJapanese",
-                "ListName → array (J)",
-                async function () {
-                    const data = getNamesOrAlert();
-                    if (data) await createJapaneseArray(data.block, data.names);
-                },
-                block => !isRuleBlock(block) && isJapanesePluginActive()
-            ),
-            makeSelectionItem(
-                "selectionListNameToFile",
-                "ListName → File",
-                function () {
-                    const data = getContextListDataOrAlert();
-                    if (data) exportTextFile(data.block, data.names);
-                }
-            ),
-            makeSelectionItem(
-                "selectionListNameToTranslatedFile",
-                "ListName → File (E,J)",
-                async function () {
-                    const data = getContextListDataOrAlert();
-                    if (data) await exportTranslatedTextFile(data.block, data.names);
-                },
-                () => isJapanesePluginActive()
-            )
-        ];
-
-        plugin.registerMenu(menu);
-        for (const item of items) plugin.registerItem(item);
-
-        // Only top-level menus are registered with Blockly. This one is nested
-        // under the extension's existing Options menu.
-        selectionMenuRegistered = true;
-        attachSelectionMenuToOptions();
+            }
+            if (!eligible) {
+                removeFloatingMenu();
+            }
+        } finally {
+            isScanning = false;
+        }
     }
-
-    let selectionMenuRegistered = false;
 
     function startObserver() {
         if (observer) return;
-        if (typeof MutationObserver !== "undefined") {
-            observer = new MutationObserver(() => {
-                if (!selectionMenuAttached) attachSelectionMenuToOptions();
-            });
-            observer.observe(document.documentElement || document.body, {
-                childList: true,
-                subtree: true
-            });
-        }
-        registerSelectionListContextMenu();
+        observer = new MutationObserver(scan);
+        observer.observe(document.documentElement || document.body, { childList: true, subtree: true });
+        scan();
     }
 
     document.addEventListener("contextmenu", event => {
         try {
+            lastContextMenuX = Number.isFinite(event.clientX) ? event.clientX : 0;
+            lastContextMenuY = Number.isFinite(event.clientY) ? event.clientY : 0;
             const blockEl = event.target?.closest?.("g.blocklyDraggable");
             const id = blockEl?.getAttribute?.("data-id") || blockEl?.dataset?.id || null;
-            if (id) {
-                lastContextBlockId = String(id);
-                lastContextBlock = getBlockFromId(lastContextBlockId);
-            }
-        } catch (_) { }
+            lastContextBlockId = id ? String(id) : null;
+            lastContextBlock = getBlockFromId(lastContextBlockId);
+            removeFloatingMenu();
+            setTimeout(scan, 0);
+        } catch (_) {
+            lastContextBlockId = null;
+            lastContextBlock = null;
+        }
     }, true);
 
     plugin.initializeWorkspace = async function () {
-        registerSelectionListContextMenu();
         startObserver();
+        scan();
     };
 })();
