@@ -164,6 +164,93 @@
         return false;
     }
 
+    function findTargetSelectionField(block) {
+        if (!block) return null;
+        if (isRuleBlock(block)) {
+            const eventField = block.getField?.("EVENTTYPE");
+            if (eventField) return eventField;
+        }
+        const value1 = block.getField?.("VALUE-1");
+        if (value1 && typeof value1.setValue === "function") return value1;
+
+        const fields = getAllFields(block);
+        const candidates = [];
+        for (const field of fields) {
+            if (typeof field?.setValue !== "function") continue;
+            const pairs = getFieldOptionPairs(field);
+            if (!isLikelySelectionField(field, pairs.map(p => p.display)) || !pairs.length) continue;
+            candidates.push({ field, pairs });
+        }
+        candidates.sort((a, b) => {
+            const an = normalize(a.field?.name).toLowerCase();
+            const bn = normalize(b.field?.name).toLowerCase();
+            const ac = normalize(a.field?.constructor?.name).toLowerCase();
+            const bc = normalize(b.field?.constructor?.name).toLowerCase();
+            const ap = an === "value-1" || ac.includes("dropdown") ? 0 : 1;
+            const bp = bn === "value-1" || bc.includes("dropdown") ? 0 : 1;
+            return ap - bp;
+        });
+        return candidates[0]?.field || null;
+    }
+
+    function applySelectionToBlock(block, pair) {
+        const liveBlock = getBlockFromId(block?.id) || block;
+        if (!liveBlock) return false;
+
+        const field = findTargetSelectionField(liveBlock);
+        if (!field || typeof field.setValue !== "function") return false;
+
+        const wantedOriginal = normalize(pair?.original);
+        const wantedDisplay = normalize(pair?.display);
+        const targetKeys = new Set(
+            [wantedOriginal, wantedDisplay].map(s => s.toLowerCase()).filter(Boolean)
+        );
+        if (!targetKeys.size) return false;
+
+        const optionPairs = getFieldOptionPairs(field);
+        let valueToSet = wantedOriginal || wantedDisplay;
+
+        for (const opt of optionPairs) {
+            const optVal = normalize(opt.value);
+            const optDisp = normalize(opt.display);
+            if (
+                (optVal && targetKeys.has(optVal.toLowerCase())) ||
+                (optDisp && targetKeys.has(optDisp.toLowerCase()))
+            ) {
+                valueToSet = optVal || optDisp;
+                break;
+            }
+        }
+
+        const Blockly = _Blockly || window.Blockly;
+        const oldValue = typeof field.getValue === "function" ? field.getValue() : undefined;
+
+        try {
+            field.setValue(valueToSet);
+            try { field.forceRerender?.(); } catch (_) { }
+            try { field.render?.(); } catch (_) { }
+            try { liveBlock.render?.(); } catch (_) { }
+            try { liveBlock.workspace?.resizeContents?.(); } catch (_) { }
+
+            const newValue = typeof field.getValue === "function" ? field.getValue() : valueToSet;
+            if (Blockly?.Events && oldValue !== newValue) {
+                try {
+                    const eventGroup = Blockly.Events.getGroup?.();
+                    if (!eventGroup && Blockly.Events.setGroup) Blockly.Events.setGroup(true);
+                    const changeEvent = Blockly.Events.Change
+                        ? new Blockly.Events.Change(liveBlock, "field", field.name || null, oldValue, newValue)
+                        : null;
+                    if (changeEvent && Blockly.Events.fire) Blockly.Events.fire(changeEvent);
+                    if (!eventGroup && Blockly.Events.setGroup) Blockly.Events.setGroup(false);
+                } catch (_) { }
+            }
+            return true;
+        } catch (err) {
+            console.error("[Selection_List] failed to apply selection to block", err);
+            return false;
+        }
+    }
+
     function extractSelectionItems(block) {
         const result = [];
         const seen = new Set();
@@ -1031,13 +1118,14 @@
 
             for (const pair of sorted) {
                 const original = normalize(pair.original || pair.display);
+                const display = normalize(pair.display || pair.original);
                 const japanese = normalize(pair.japanese || original);
                 const row = document.createElement("div");
                 Object.assign(row.style, { display: "flex", alignItems: "center", minHeight: "42px", padding: "7px 16px", boxSizing: "border-box", borderBottom: "1px solid #273032", cursor: "pointer", gap: "14px", userSelect: "none" });
 
                 if (!jpActive) {
                     const single = document.createElement("div");
-                    single.textContent = original;
+                    single.textContent = display || original;
                     Object.assign(single.style, { flex: "1 1 100%", minWidth: "0", fontSize: "15px", fontWeight: "600", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" });
                     row.appendChild(single);
                 } else {
@@ -1045,9 +1133,9 @@
                     const right = document.createElement("div");
                     if (displayMode === "jaen") {
                         left.textContent = japanese;
-                        right.textContent = original;
+                        right.textContent = display || original;
                     } else {
-                        left.textContent = original;
+                        left.textContent = display || original;
                         right.textContent = japanese;
                     }
                     Object.assign(left.style, { flex: "1 1 50%", minWidth: "0", fontSize: "15px", fontWeight: "600", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" });
@@ -1070,7 +1158,7 @@
                 row.addEventListener("mouseleave", () => {
                     refreshRowSelection();
                 });
-                row.addEventListener("click", async (event) => {
+                row.addEventListener("click", (event) => {
                     const isRange = event.shiftKey;
                     const isToggle = event.ctrlKey || event.metaKey;
                     if (isRange || isToggle) {
@@ -1101,16 +1189,17 @@
                     rows.forEach(r => r._refreshSelection?.());
                     updateSelectedCount();
 
-                    const ok = copyViaPortalNative(block, [original], isRuleBlock(block) ? "EVENTTYPE" : "VALUE-1");
+                    const ok = applySelectionToBlock(block, { original, display });
                     if (ok) {
-                        row.style.background = "#345047";
-                        setTimeout(() => { if (row.isConnected) row._refreshSelection?.(); }, 180);
+                        row.style.background = "#276749";
+                        row.style.color = "#ffffff";
+                        setTimeout(() => { if (row.isConnected) row._refreshSelection?.(); }, 220);
                     } else {
-                        alert(getPortalLanguage() === "ja" ? "クリップボードへのコピーに失敗しました。" : "Failed to copy to clipboard.");
+                        alert(getPortalLanguage() === "ja" ? "ブロックの選択項目を変更できませんでした。" : "Failed to update the block's selection.");
                     }
                 });
                 list.appendChild(row);
-                const searchText = jpActive ? `${japanese} ${original}` : original;
+                const searchText = jpActive ? `${japanese} ${display} ${original}` : `${display} ${original}`;
                 rows.push({ el: row, original, searchText: searchText.toLowerCase(), _refreshSelection: refreshRowSelection });
                 refreshRowSelection();
             }
@@ -1246,16 +1335,17 @@
                 originals.forEach((name, i) => translatedMap.set(normalize(name), translated[i] || name));
                 const translatedPairs = pairs.map(pair => ({
                     original: normalize(pair.original || pair.display),
+                    display: normalize(pair.display || pair.original),
                     japanese: translatedMap.get(normalize(pair.original || pair.display)) || normalize(pair.original || pair.display)
                 }));
                 await openJListSelect(block, translatedPairs);
             } catch (error) {
                 if (progressBar) removeLoadingStatus(progressBar);
                 console.error("Selection_List JlistSelect failed", error);
-                await openJListSelect(block, pairs.map(p => ({ original: normalize(p.original || p.display), japanese: "" })));
+                await openJListSelect(block, pairs.map(p => ({ original: normalize(p.original || p.display), display: normalize(p.display || p.original), japanese: "" })));
             }
         } else {
-            await openJListSelect(block, pairs.map(p => ({ original: normalize(p.original || p.display), japanese: "" })));
+            await openJListSelect(block, pairs.map(p => ({ original: normalize(p.original || p.display), display: normalize(p.display || p.original), japanese: "" })));
         }
     }
 
