@@ -193,6 +193,15 @@
         return candidates[0]?.field || null;
     }
 
+    function getCurrentSelectedValue(block) {
+        const liveBlock = getBlockFromId(block?.id) || block;
+        const field = findTargetSelectionField(liveBlock);
+        if (!field) return { value: "", text: "" };
+        const value = normalize(typeof field.getValue === "function" ? field.getValue() : "");
+        const text = normalize(typeof field.getText === "function" ? field.getText() : "");
+        return { value, text };
+    }
+
     function applySelectionToBlock(block, pair) {
         const liveBlock = getBlockFromId(block?.id) || block;
         if (!liveBlock) return false;
@@ -1079,6 +1088,29 @@
         let lastSelectedOriginal = null;
         let displayMode = jpActive ? "jaen" : "en";
 
+        let initialScrollDone = false;
+
+        const currentSel = getCurrentSelectedValue(block);
+        const currentKeys = new Set(
+            [currentSel.value, currentSel.text].map(s => s.toLowerCase()).filter(Boolean)
+        );
+        if (currentKeys.size) {
+            for (const pair of pairs) {
+                const orig = normalize(pair.original || pair.display);
+                const disp = normalize(pair.display || pair.original);
+                const jp = normalize(pair.japanese);
+                if (
+                    (orig && currentKeys.has(orig.toLowerCase())) ||
+                    (disp && currentKeys.has(disp.toLowerCase())) ||
+                    (jp && currentKeys.has(jp.toLowerCase()))
+                ) {
+                    selectedOriginals.add(orig);
+                    lastSelectedOriginal = orig;
+                    break;
+                }
+            }
+        }
+
         const sortedPairs = () => {
             const copy = [...pairs];
             if (!jpActive || displayMode === "enja" || displayMode === "en") {
@@ -1189,7 +1221,7 @@
                     rows.forEach(r => r._refreshSelection?.());
                     updateSelectedCount();
 
-                    const ok = applySelectionToBlock(block, { original, display });
+                    const ok = applySelectionToBlock(block, { original, display: normalize(pair.display || pair.original) });
                     if (ok) {
                         row.style.background = "#276749";
                         row.style.color = "#ffffff";
@@ -1213,6 +1245,15 @@
             empty.style.display = visible ? "none" : "block";
             countLabel.textContent = `${sorted.length} items`;
             updateSelectedCount();
+            if (!initialScrollDone) {
+                initialScrollDone = true;
+                const targetRow = rows.find(r => r.el.style.display !== "none" && selectedOriginals.has(r.original));
+                if (targetRow) {
+                    requestAnimationFrame(() => {
+                        targetRow.el.scrollIntoView({ block: "center", behavior: "auto" });
+                    });
+                }
+            }
         };
 
         function updateSelectedCount() {
@@ -1730,6 +1771,7 @@
         observer.observe(document.documentElement || document.body, { childList: true, subtree: true });
         scan();
     }
+    
 
     document.addEventListener("contextmenu", event => {
         try {
